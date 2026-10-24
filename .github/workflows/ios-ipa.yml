@@ -51,33 +51,27 @@ jobs:
         shell: bash
         run: |
           set +e
-          echo "--- react-native config ---"
-          npx react-native config > /tmp/rnconfig.json 2>/tmp/rnconfig.err
-          echo "cli config exit: $?"
-          head -c 400 /tmp/rnconfig.err
-          echo ""
-          echo "--- node loadConfig test ---"
-          node - <<'EOF'
-          try {
-            const cli = require('@react-native-community/cli')
-            const config = cli.loadConfig({ root: process.cwd() })
-            console.log('loadConfig OK, dependencies:', Object.keys(config.dependencies || {}).length)
-          } catch (e) {
-            console.error('loadConfig FAIL:', e.message)
-          }
-          EOF
-          echo "--- pod env sanity ---"
-          node --version && ruby --version && pod --version
+          echo "--- env ---"
+          node --version; which node; ls -la node_modules/.bin/react-native 2>&1 | head -2
+          echo "--- cli version ---"
+          node -p "require('@react-native-community/cli/package.json').version" 2>&1
+          echo "--- findProjectRoot ---"
+          node -e "try { console.log('root:', require('@react-native-community/cli-tools').findProjectRoot()) } catch(e) { console.error('FAIL:', e.message) }"
+          echo "--- loadConfig() no-arg ---"
+          node -e "const cli=require('@react-native-community/cli'); try { const c=cli.loadConfig(); console.log('OK deps:', Object.keys(c.dependencies||{}).length, 'root:', c.root, 'ios:', !!(c.project&&c.project.ios)) } catch(e){ console.error('FAIL:', e.message) }"
+
+      - name: Generate RN config for Podfile
+        shell: bash
+        run: |
+          set -e
+          node "$(node -p "require('@react-native-community/cli').bin")" config > ios/native_modules.json
+          node -e "const c=require('./ios/native_modules.json'); const s=c.project && c.project.ios && c.project.ios.sourceDir; console.log('root:', c.root); console.log('rnVer:', c.reactNativeVersion); console.log('project.ios.sourceDir:', s || 'MISSING'); console.log('deps:', Object.keys(c.dependencies||{}).length); if(!s) process.exit(1)"
 
       - name: Install CocoaPods dependencies
         shell: bash
         run: |
           set -e
           cd ios
-          # Generate native modules config to file, Podfile reads it (avoids
-          # IO.popen + cli_bin resolution issues on some runners)
-          npx react-native config > native_modules.json
-          node -e "const c=require('./native_modules.json'); const s=c.project && c.project.ios && c.project.ios.sourceDir; console.log('project.ios.sourceDir:', s || 'MISSING'); console.log('deps:', Object.keys(c.dependencies||{}).length); if(!s) process.exit(1)"
           bundle exec pod install --repo-update
 
       - name: Read package version
