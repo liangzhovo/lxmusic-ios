@@ -79,6 +79,20 @@ export const getMusicUrlInfo = async({ musicInfo, quality, isRefresh, allowToggl
     if (targetMusicInfo.id != musicInfo.id && !isFromCache) void saveMusicUrl(targetMusicInfo, targetQuality, url)
     void saveMusicUrl(musicInfo, targetQuality, url)
     return { url, quality: targetQuality }
+  }).catch(async(err) => {
+    // 网络获取失败（断网/音源错误）时回退本地已下载文件，保证断网也能播放
+    if (!isRefresh) {
+      try {
+        const localPath = await getDownloadedFilePath(musicInfo)
+        if (localPath) {
+          console.log('local fallback hit (network failed):', localPath)
+          return { url: localPath, quality: null }
+        }
+      } catch (e) {
+        console.log('local fallback check failed:', e)
+      }
+    }
+    throw err
   })
 }
 

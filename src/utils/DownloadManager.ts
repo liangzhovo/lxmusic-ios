@@ -355,6 +355,7 @@ const startDownload = async(task: DownloadTask) => {
         speed: 0,
       })
       recordCompleted(task.musicInfo, localPath)
+      console.log('download completed, local registered:', localPath)
     } else if (result2 && result2.statusCode === 403) {
       throw new Error('下载被禁止(403)，可能需要登录或有防盗链')
     } else if (result2 && result2.statusCode === 404) {
