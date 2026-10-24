@@ -55,8 +55,13 @@ export const getMusicUrlInfo = async({ musicInfo, quality, isRefresh, allowToggl
   // }
   // 播放（非强制刷新）时优先使用已下载的本地文件，不联网
   if (!isRefresh) {
-    const localPath = await getDownloadedFilePath(musicInfo)
-    if (localPath) return { url: localPath, quality: quality ?? null }
+    try {
+      const localPath = await getDownloadedFilePath(musicInfo)
+      if (localPath) return { url: localPath, quality: quality ?? null }
+    } catch (e) {
+      // 本地查询异常时回落到正常网络获取，避免播放卡在"获取链接中"
+      console.log('local download check failed:', e)
+    }
   }
   const targetQuality = quality ?? getPlayQuality(settingState.setting['player.playQuality'], musicInfo)
   const cachedUrl = await getStoreMusicUrl(musicInfo, targetQuality)

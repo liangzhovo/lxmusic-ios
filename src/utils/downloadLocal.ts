@@ -27,15 +27,21 @@ export const clearCompletedFiles = () => {
 
 export const getCompletedFiles = (): CompletedFile[] => [...completedFiles]
 
+/** 归一化文本（用于宽松匹配：去空白、忽略大小写） */
+const norm = (s?: string | null) => String(s ?? '').replace(/\s+/g, '').toLowerCase()
+
 /**
  * 查询歌曲本地已下载文件路径（供播放优先本地使用）
- * 优先精确 id 匹配，其次 source+name+singer 兜底（列表转在线信息后 id 可能不同）
+ * 优先精确 id 匹配（均非空才比较，避免 undefined===undefined 误匹配），
+ * 其次 source+name+singer 归一化兜底（列表转在线信息后 id/大小写/空白可能不同）
  */
 export const getDownloadedFilePath = async(musicInfo: LX.Music.MusicInfoOnline): Promise<string | null> => {
-  const match = (f: CompletedFile) => (
-    f.musicInfo.id === musicInfo.id ||
-    (f.musicInfo.source === musicInfo.source && f.musicInfo.name === musicInfo.name && f.musicInfo.singer === musicInfo.singer)
-  )
+  const match = (f: CompletedFile) => {
+    if (f.musicInfo.id && musicInfo.id && f.musicInfo.id === musicInfo.id) return true
+    return norm(f.musicInfo.source) === norm(musicInfo.source) &&
+      norm(f.musicInfo.name) === norm(musicInfo.name) &&
+      norm(f.musicInfo.singer) === norm(musicInfo.singer)
+  }
   const file = completedFiles.find(match)
   if (!file) return null
   const exists = await RNFS.exists(file.localPath)
