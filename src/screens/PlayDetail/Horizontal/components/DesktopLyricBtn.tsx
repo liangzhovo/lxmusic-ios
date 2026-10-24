@@ -1,6 +1,3 @@
-/**
- * 播放详情页 - 共享"桌面歌词"按钮（横/竖屏通用，方向差异由 variant 控制）
- */
 import Btn from './Btn'
 import { useSettingValue } from '@/store/setting/hook'
 import DesktopLyricEnable, { type DesktopLyricEnableType } from '@/components/DesktopLyricEnable'
@@ -11,7 +8,7 @@ import settingState from '@/store/setting/state'
 import { isDesktopLyricSupported } from '@/utils/nativeModules/lyricDesktop'
 
 
-export default memo(({ variant = 'horizontal' }: { variant?: 'horizontal' | 'vertical' }) => {
+export default memo(() => {
   const enabledLyric = useSettingValue('desktopLyric.enable')
   const desktopLyricEnableRef = useRef<DesktopLyricEnableType>(null)
   if (!isDesktopLyricSupported) return null
@@ -27,7 +24,7 @@ export default memo(({ variant = 'horizontal' }: { variant?: 'horizontal' | 'ver
 
   return (
     <>
-      <Btn icon={enabledLyric ? 'lyric-on' : 'lyric-off'} onPress={update} onLongPress={updateLock} variant={variant} />
+      <Btn icon={enabledLyric ? 'lyric-on' : 'lyric-off'} onPress={update} onLongPress={updateLock} />
       <DesktopLyricEnable ref={desktopLyricEnableRef} />
     </>
   )

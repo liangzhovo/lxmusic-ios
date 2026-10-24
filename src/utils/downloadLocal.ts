@@ -30,12 +30,20 @@ export const getCompletedFiles = (): CompletedFile[] => [...completedFiles]
 /** 归一化文本（用于宽松匹配：去空白、忽略大小写） */
 const norm = (s?: string | null) => String(s ?? '').replace(/\s+/g, '').toLowerCase()
 
-/** 匹配已下载文件（id 均非空才比较；name+singer 归一化兜底，忽略音源差异） */
+/** 歌手名匹配：归一化后完全相等，或一方包含另一方（列表项可能拼接专辑等） */
+const singerMatch = (a?: string | null, b?: string | null) => {
+  const na = norm(a)
+  const nb = norm(b)
+  if (!na || !nb) return false
+  return na === nb || na.includes(nb) || nb.includes(na)
+}
+
+/** 匹配已下载文件（id 均非空才比较；name 归一化 + singer 宽松匹配兜底，忽略音源差异） */
 const findCompletedFile = (musicInfo: { id?: string, source?: string, name?: string, singer?: string }) => {
   return completedFiles.find(f => {
     if (f.musicInfo.id && musicInfo.id && f.musicInfo.id === musicInfo.id) return true
     return norm(f.musicInfo.name) === norm(musicInfo.name) &&
-      norm(f.musicInfo.singer) === norm(musicInfo.singer)
+      singerMatch(f.musicInfo.singer, musicInfo.singer)
   })
 }
 

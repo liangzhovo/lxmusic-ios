@@ -7,9 +7,9 @@ import { createStyle } from '@/utils/tools'
 import { useTheme } from '@/store/theme/hook'
 import { useSettingValue } from '@/store/setting/hook'
 import Text, { AnimatedColorText } from '@/components/common/Text'
+import { setSpText } from '@/utils/pixelRatio'
 import playerState from '@/store/player/state'
 import { scrollTo } from '@/utils/scroll'
-import { getLyricLineHeight, getLyricScrollOffset } from '../shared/logic'
 import PlayLine, { type PlayLineType } from '../components/PlayLine'
 import KaraokeLine from '../components/KaraokeLine'
 import { normalizeExtendedLyricText } from '../components/lyricText'
@@ -33,7 +33,7 @@ const LrcLine = memo(({ line, lineNum, activeLine, activeWordIndex, activeWordPr
   const lrcFontSize = useSettingValue('playDetail.horizontal.style.lrcFontSize')
   const textAlign = useSettingValue('playDetail.style.align')
   const size = lrcFontSize / 10
-  const lineHeight = getLyricLineHeight(lrcFontSize)
+  const lineHeight = setSpText(size) * 1.3
 
   const colors = useMemo(() => {
     const active = activeLine == lineNum
@@ -134,14 +134,13 @@ export default () => {
     if (flatListRef.current) {
       // console.log('handleScrollToActive', index)
       if (scrollInfoRef.current && lineRef.current.line - lineRef.current.prevLine == 1) {
-        const offset = getLyricScrollOffset(
-          listLayoutInfoRef.current.lineHeights,
-          index,
-          listLayoutInfoRef.current.spaceHeight,
-          scrollInfoRef.current.layoutMeasurement.height,
-        )
+        let offset = listLayoutInfoRef.current.spaceHeight
+        for (let line = 0; line < index; line++) {
+          offset += listLayoutInfoRef.current.lineHeights[line]
+        }
+        offset += (listLayoutInfoRef.current.lineHeights[line] ?? 0) / 2
         try {
-          scrollCancelRef.current = scrollTo(flatListRef.current, scrollInfoRef.current, offset, 600, () => {
+          scrollCancelRef.current = scrollTo(flatListRef.current, scrollInfoRef.current, offset - scrollInfoRef.current.layoutMeasurement.height * 0.42, 600, () => {
             scrollCancelRef.current = null
           })
         } catch {}
