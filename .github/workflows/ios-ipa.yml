@@ -72,7 +72,12 @@ jobs:
       - name: Install CocoaPods dependencies
         shell: bash
         run: |
+          set -e
           cd ios
+          # Generate native modules config to file, Podfile reads it (avoids
+          # IO.popen + cli_bin resolution issues on some runners)
+          npx react-native config > native_modules.json
+          node -e "const c=require('./native_modules.json'); const s=c.project && c.project.ios && c.project.ios.sourceDir; console.log('project.ios.sourceDir:', s || 'MISSING'); console.log('deps:', Object.keys(c.dependencies||{}).length); if(!s) process.exit(1)"
           bundle exec pod install --repo-update
 
       - name: Read package version

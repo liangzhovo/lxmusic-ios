@@ -120,8 +120,16 @@ def lx_patch_swift_audio_player_access(installer)
   Pod::UI.puts "Patched SwiftAudio queued player access: #{queued_player_path}".green
 end
 
+def lx_load_native_modules_config
+  # CI generates ios/native_modules.json with `npx react-native config` first.
+  # Reading from file avoids IO.popen + cli_bin resolution issues on some runners.
+  json_path = File.join(__dir__, 'native_modules.json')
+  return JSON.parse(File.read(json_path)) if File.exist?(json_path)
+  use_native_modules!
+end
+
 target 'LxMusicMobile' do
-  config = use_native_modules!
+  config = lx_load_native_modules_config
 
   lx_build_libflac_xcframework
   pod 'LXLibFLAC', :path => './Vendor/LXLibFLAC'
