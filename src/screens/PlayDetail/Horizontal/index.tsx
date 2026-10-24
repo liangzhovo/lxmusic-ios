@@ -1,54 +1,22 @@
-import { memo, useEffect } from 'react'
-import { View, AppState } from 'react-native'
-import { screenkeepAwake, screenUnkeepAwake } from '@/utils/nativeModules/utils'
+import { memo } from 'react'
+import { View } from 'react-native'
 import StatusBar from '@/components/common/StatusBar'
 import MoreBtn from './MoreBtn'
 
 import Header from './components/Header'
-import { setComponentId } from '@/core/common'
-import { COMPONENT_IDS } from '@/config/constant'
 import PageContent from '@/components/PageContent'
-import commonState, { type InitState as CommonState } from '@/store/common/state'
 
 import Pic from './Pic'
-// import ControlBtn from './ControlBtn'
 import Lyric from './Lyric'
 import Player from './Player'
 import { createStyle } from '@/utils/tools'
 import { useStatusbarHeight } from '@/store/common/hook'
-// import MoreBtn from './MoreBtn2'
+import { horizontalLayout } from '../shared/layout'
+import { usePlayDetailScreen } from '../shared/usePlayDetailScreen'
 
 export default memo(({ componentId }: { componentId: string }) => {
   const statusBarHeight = useStatusbarHeight()
-
-  useEffect(() => {
-    setComponentId(COMPONENT_IDS.playDetail, componentId)
-    screenkeepAwake()
-    let appstateListener = AppState.addEventListener('change', (state) => {
-      switch (state) {
-        case 'active':
-          if (!commonState.componentIds.comment) screenkeepAwake()
-          break
-        case 'background':
-          screenUnkeepAwake()
-          break
-      }
-    })
-
-    const handleComponentIdsChange = (ids: CommonState['componentIds']) => {
-      if (ids.comment) screenUnkeepAwake()
-      else if (AppState.currentState == 'active') screenkeepAwake()
-    }
-
-    global.state_event.on('componentIdsUpdated', handleComponentIdsChange)
-
-    return () => {
-      global.state_event.off('componentIdsUpdated', handleComponentIdsChange)
-      appstateListener.remove()
-      screenUnkeepAwake()
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  usePlayDetailScreen(componentId)
 
   return (
     <PageContent>
@@ -61,10 +29,6 @@ export default memo(({ componentId }: { componentId: string }) => {
             <Pic componentId={componentId} />
           </View>
           <Player />
-          {/* <View style={styles.controlBtn} nativeID="pageIndicator">
-            <MoreBtn />
-            <ControlBtn />
-          </View> */}
         </View>
         <View style={styles.right}>
           <Lyric />
@@ -79,37 +43,33 @@ const styles = createStyle({
     flex: 1,
     flexDirection: 'row',
     // 铺满屏幕（不设水平留白）
+    paddingHorizontal: horizontalLayout.containerPaddingHorizontal,
   },
   left: {
     flex: 1,
-    width: '47%',
+    width: `${horizontalLayout.leftWidthRatio * 100}%`,
     // 左侧适度安全边距（不贴物理边缘，但不过分收窄）
-    paddingLeft: 20,
+    paddingLeft: horizontalLayout.leftPaddingLeft,
     // 底部留白：把进度条与时间顶离屏幕底边
-    paddingBottom: 40,
-    // backgroundColor: 'rgba(0,0,0,0.1)',
+    paddingBottom: horizontalLayout.leftPaddingBottom,
   },
   leftContent: {
     flexShrink: 1,
     flexGrow: 0,
-    // 与 left.paddingLeft 对齐（移除旧的 15px 缩进，保证与顶部图标同一条垂直线）
+    // 与 left.paddingLeft 对齐（保证与顶部图标同一条垂直线）
     marginLeft: 0,
-    // flexDirection: 'row',
-    // backgroundColor: 'rgba(0,0,0,0.1)',
-    // alignItems: 'center',
   },
   right: {
-    width: '53%',
+    width: `${horizontalLayout.rightWidthRatio * 100}%`,
     flexGrow: 0,
     flexShrink: 0,
     // 歌词区最小安全边距（基本铺满到右缘）
-    paddingRight: 10,
+    paddingRight: horizontalLayout.rightPaddingRight,
   },
   controlBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    // backgroundColor: '#eee',
   },
 })
