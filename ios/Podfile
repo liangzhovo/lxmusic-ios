@@ -123,7 +123,8 @@ end
 # Static autolinking list (equivalent to what `react-native config` returns).
 # Hardcoded to avoid runner-specific failures of `use_native_modules!`
 # (IO.popen + cli_bin resolution / loadConfig returning empty on some CI).
-REACT_NATIVE_PATH = File.expand_path('../node_modules/react-native', __dir__)
+# Path relative to repo root (same semantics as use_native_modules! returns)
+REACT_NATIVE_PATH = 'node_modules/react-native'
 
 def lx_native_pods
   {
