@@ -4,6 +4,7 @@ import { addTempPlayList } from '@/core/player/tempPlayList'
 import settingState from '@/store/setting/state'
 import { similar, sortInsert, toNewMusicInfo, toOldMusicInfo } from '@/utils'
 import { confirmDialog, openUrl, shareMusic, toast } from '@/utils/tools'
+import { hapticLight } from '@/utils/nativeModules/utils'
 import { addDislikeInfo, hasDislike } from '@/core/dislikeList'
 import playerState from '@/store/player/state'
 import { addDownload, addDownloads } from '@/utils/DownloadManager'
@@ -19,6 +20,7 @@ const normalizeSearchText = (str: string | undefined | null) => String(str ?? ''
 const getMusicSearchText = (musicInfo: LX.Music.MusicInfo) => `${musicInfo.name ?? ''}${musicInfo.singer ?? ''}${musicInfo.meta.albumName ?? ''}`
 
 export const handlePlay = (listId: SelectInfo['listId'], index: SelectInfo['index']) => {
+  hapticLight()
   void playList(listId, index)
 }
 export const handlePlayLater = (listId: SelectInfo['listId'], musicInfo: SelectInfo['musicInfo'], selectedList: SelectInfo['selectedList'], onCancelSelect: () => void) => {
@@ -164,8 +166,9 @@ export const handleDownload = (musicInfo: SelectInfo['musicInfo']) => {
   const online = toOnlineMusicInfo(musicInfo)
   if (!online) return
   showDownloadQualityDialog(musicInfo.name, online, quality => {
+    hapticLight()
     addDownload(online, quality)
-    toast(`${musicInfo.name} 已添加到下载队列`)
+    toast(`${musicInfo.name} 已添加到下载任务`)
   })
 }
 
@@ -176,8 +179,9 @@ export const handleMultiDownload = (musicInfos: SelectInfo['selectedList'], onCa
   if (list.length === 0) return
   // 批量下载：按第一首歌的可用音质弹一次选择，应用于全部
   showDownloadQualityDialog(`${list.length} 首歌曲`, list[0], quality => {
+    hapticLight()
     addDownloads(list, quality)
-    toast(`已添加 ${list.length} 首歌曲到下载队列`)
+    toast(`已添加 ${list.length} 首歌曲到下载任务`)
     onCancelSelect()
   })
 }

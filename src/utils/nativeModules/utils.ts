@@ -99,6 +99,13 @@ export const shareFile = async(shareTitle: string, filePath: string): Promise<vo
   })
 }
 
+/** 轻微震动反馈（点击歌曲等轻交互使用；Android 无原生实现时静默跳过） */
+export const hapticLight = () => {
+  if (typeof UtilsModule?.hapticLight == 'function') {
+    UtilsModule.hapticLight()
+  }
+}
+
 export const getSystemLocales = async(): Promise<string> => {
   if (typeof UtilsModule?.getSystemLocales == 'function') return UtilsModule.getSystemLocales()
 

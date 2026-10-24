@@ -10,6 +10,7 @@ import { handleDislikeMusic, handlePlay, handlePlayLater, handleShare, handleSho
 import { createStyle } from '@/utils/tools'
 import DownloadManager from '@/utils/DownloadManager'
 import { showDownloadQualityDialog } from '@/utils/downloadHelper'
+import { hapticLight } from '@/utils/nativeModules/utils'
 
 export interface OnlineListProps {
   onRefresh: ListProps['onRefresh']
@@ -67,16 +68,18 @@ export default forwardRef<OnlineListType, OnlineListProps>(({
   }
   const handleDownload = (info: SelectInfo) => {
     showDownloadQualityDialog(info.musicInfo.name, info.musicInfo, quality => {
+      hapticLight()
       DownloadManager.addDownload(info.musicInfo, quality)
-      Alert.alert('下载', `已添加「${info.musicInfo.name}」到下载队列`)
+      Alert.alert('下载', `已添加「${info.musicInfo.name}」到下载任务`)
     })
   }
   const handleMultiDownload = () => {
     const selectedList = listRef.current?.getSelectedList() ?? []
     if (selectedList.length === 0) return
     showDownloadQualityDialog(`${selectedList.length} 首歌曲`, selectedList[0], quality => {
+      hapticLight()
       DownloadManager.addDownloads(selectedList, quality)
-      Alert.alert('下载', `已添加 ${selectedList.length} 首歌曲到下载队列`)
+      Alert.alert('下载', `已添加 ${selectedList.length} 首歌曲到下载任务`)
       hancelExitSelect()
     })
   }
