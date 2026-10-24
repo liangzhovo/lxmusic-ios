@@ -60,13 +60,6 @@ jobs:
           echo "--- loadConfig() no-arg ---"
           node -e "const cli=require('@react-native-community/cli'); try { const c=cli.loadConfig(); console.log('OK deps:', Object.keys(c.dependencies||{}).length, 'root:', c.root, 'ios:', !!(c.project&&c.project.ios)) } catch(e){ console.error('FAIL:', e.message) }"
 
-      - name: Generate RN config for Podfile
-        shell: bash
-        run: |
-          set -e
-          node "$(node -p "require('@react-native-community/cli').bin")" config > ios/native_modules.json
-          node -e "const c=require('./ios/native_modules.json'); const s=c.project && c.project.ios && c.project.ios.sourceDir; console.log('root:', c.root); console.log('rnVer:', c.reactNativeVersion); console.log('project.ios.sourceDir:', s || 'MISSING'); console.log('deps:', Object.keys(c.dependencies||{}).length); if(!s) process.exit(1)"
-
       - name: Install CocoaPods dependencies
         shell: bash
         run: |
