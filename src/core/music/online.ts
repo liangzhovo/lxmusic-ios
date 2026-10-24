@@ -14,10 +14,7 @@ import {
   handleGetOnlinePicUrl,
   getCachedLyricInfo,
 } from './utils'
-
-// 延迟加载下载管理器（避免与 DownloadManager -> online 的模块循环依赖）
-let dlManagerPromise: Promise<{ getDownloadedFilePath: (musicInfo: LX.Music.MusicInfoOnline) => Promise<string | null> }> | null = null
-const getDlManager = async() => (dlManagerPromise ??= import('@/utils/DownloadManager'))
+import { getDownloadedFilePath } from '@/utils/downloadLocal'
 
 /* export const setMusicUrl = ({ musicInfo, type, url }: {
   musicInfo: LX.Music.MusicInfo
@@ -58,7 +55,7 @@ export const getMusicUrlInfo = async({ musicInfo, quality, isRefresh, allowToggl
   // }
   // 播放（非强制刷新）时优先使用已下载的本地文件，不联网
   if (!isRefresh) {
-    const localPath = await (await getDlManager()).getDownloadedFilePath(musicInfo)
+    const localPath = await getDownloadedFilePath(musicInfo)
     if (localPath) return { url: localPath, quality: quality ?? null }
   }
   const targetQuality = quality ?? getPlayQuality(settingState.setting['player.playQuality'], musicInfo)

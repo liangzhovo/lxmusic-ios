@@ -44,14 +44,16 @@ const usePlayIndex = () => {
   return playIndex
 }
 
-/** 已下载歌曲 id 映射（订阅下载任务变化） */
+/** 已下载歌曲标识映射（id + source|name|singer 双索引，订阅下载任务变化） */
 const useDownloadedMap = () => {
   const [downloadedMap, setDownloadedMap] = useState<Record<string, boolean>>({})
   useEffect(() => {
     const update = () => {
       const map: Record<string, boolean> = {}
       for (const t of getTasks()) {
-        if (t.status === 'completed') map[t.musicInfo.id] = true
+        if (t.status !== 'completed') continue
+        map[t.musicInfo.id] = true
+        map[`${t.musicInfo.source}|${t.musicInfo.name}|${t.musicInfo.singer}`] = true
       }
       setDownloadedMap(map)
     }
@@ -283,7 +285,7 @@ const List = forwardRef<ListType, ListProps>(({ onShowMenu, onMuiltSelectMode, o
       rowInfo={rowInfo.current}
       isShowAlbumName={isShowAlbumName}
       isShowInterval={isShowInterval}
-      isDownloaded={!!downloadedMap[item.id]}
+      isDownloaded={!!downloadedMap[item.id] || !!downloadedMap[`${item.source}|${item.name}|${item.singer}`]}
     />
   )
   const getkey: FlatListType['keyExtractor'] = item => item.id

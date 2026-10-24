@@ -8,16 +8,22 @@ import { shareFile } from '@/utils/nativeModules/utils'
 import { toast } from '@/utils/tools'
 import type { DownloadTask } from './DownloadManager'
 
-// 查找文件的所有附属文件（歌词、封面）
+// 查找文件的所有附属文件（歌词、封面）- 精确匹配扩展名，避免误打包同名/其他音质
+const RELATED_EXTS = ['.lrc', '.jpg', '.png']
 const findRelatedFiles = async(basePath: string): Promise<string[]> => {
   const dir = basePath.substring(0, basePath.lastIndexOf('/'))
-  const baseName = basePath.substring(basePath.lastIndexOf('/') + 1).replace(/\.[^.]+$/, '')
+  const fileBase = basePath.substring(basePath.lastIndexOf('/') + 1)
+  const baseName = fileBase.replace(/\.[^.]+$/, '')
   const files: string[] = []
 
   try {
     const dirFiles = await RNFS.readDir(dir)
     for (const f of dirFiles) {
-      if (f.name.startsWith(baseName) && f.name !== basePath.substring(basePath.lastIndexOf('/') + 1)) {
+      if (f.name.length <= baseName.length) continue
+      if (!f.name.startsWith(baseName)) continue
+      // 只匹配 baseName 后紧跟已知附属扩展名（排除其它歌曲/其它音质）
+      const rest = f.name.substring(baseName.length)
+      if (RELATED_EXTS.some(ext => rest === ext)) {
         files.push(f.path)
       }
     }
@@ -26,6 +32,9 @@ const findRelatedFiles = async(basePath: string): Promise<string[]> => {
   }
   return files
 }
+
+const MAX_TOTAL_EXPORT_BYTES = 300 * 1024 * 1024
+const MAX_SINGLE_FILE_BYTES = 60 * 1024 * 1024
 
 // 导出选中的下载任务为zip
 export const exportDownloads = async(tasks: DownloadTask[]): Promise<void> => {
@@ -38,6 +47,27 @@ export const exportDownloads = async(tasks: DownloadTask[]): Promise<void> => {
   if (completedTasks.length === 0) {
     toast('没有可导出的已完成音乐')
     return
+  }
+
+  // 大小预估：防止大文件 base64 驻留内存导致 OOM（Hermes 内存有限）
+  let totalBytes = 0
+  let tooLargeFile = ''
+  for (const task of completedTasks) {
+    if (!task.localPath) continue
+    try {
+      const stat = await RNFS.stat(task.localPath)
+      totalBytes += stat.size
+      if (stat.size > MAX_SINGLE_FILE_BYTES) tooLargeFile = task.musicInfo.name || ''
+    } catch (e) {
+      console.log('stat failed:', e)
+    }
+  }
+  if (totalBytes > MAX_TOTAL_EXPORT_BYTES) {
+    toast('导出内容过大（超过300MB），请分批导出')
+    return
+  }
+  if (tooLargeFile) {
+    toast(`「${tooLargeFile}」文件较大，导出可能较慢或内存不足`)
   }
 
   toast(`正在打包 ${completedTasks.length} 首音乐...`)

@@ -6,6 +6,7 @@ import RNFS from 'react-native-fs'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { getMusicUrlInfo, getLyricInfo, getPicUrl } from '@/core/music/online'
 import { requestMsg } from '@/utils/message'
+import { clearCompletedFiles, recordCompleted, removeCompletedFile } from './downloadLocal'
 
 const STORAGE_KEY = 'lx_music_download_tasks'
 
@@ -37,6 +38,12 @@ let tasks: DownloadTask[] = []
 const listeners = new Set<TaskListener>()
 const activeDownloads = new Map<string, { job: any, cancelled: boolean }>()
 const cancelledTasks = new Set<string>()
+// iOS: RNFS job.stop() may leave job.promise pending forever (no resolve/reject
+// when the server supports range requests). Keep an abort handle per task so
+// pause/remove can release the pending await immediately, plus a hard settle
+// timeout as a last resort. Without this, the queue deadlocks on iOS.
+const abortControllers = new Map<string, { reject: (e: Error) => void }>()
+const DOWNLOAD_SETTLE_TIMEOUT = 10 * 60 * 1000
 let isProcessing = false
 
 const ensureDir = async() => {
@@ -79,6 +86,10 @@ export const loadTasks = async() => {
         ...t,
         status: (t.status === 'downloading' || t.status === 'preparing') ? 'waiting' : t.status,
       }))
+      // 重建已下载文件注册表（供播放本地优先）
+      for (const t of tasks) {
+        if (t.status === 'completed' && t.localPath) recordCompleted(t.musicInfo, t.localPath)
+      }
       notify()
       // 恢复等待中的任务
       const waitingTasks = tasks.filter(t => t.status === 'waiting')
@@ -141,8 +152,8 @@ const getMusicDownloadUrl = async(
     })
 
   return firstTry.catch(async(err: any) => {
-    // tooManyRequests 延迟2-6秒重试
-    if (err.message == requestMsg.tooManyRequests) {
+    // tooManyRequests 延迟2-6秒重试（仅一次，防止无限递归）
+    if (!isRetryed && err.message == requestMsg.tooManyRequests) {
       const time = 2 + Math.random() * 4
       await new Promise(resolve => setTimeout(resolve, time * 1000))
       return getMusicDownloadUrl(musicInfo, isRefresh, true)
@@ -226,7 +237,9 @@ const startDownload = async(task: DownloadTask) => {
     const artist = task.musicInfo.singer || '未知艺术家'
     const title = task.musicInfo.name || '未知歌曲'
     const ext = result.url.includes('.flac') ? 'flac' : result.url.includes('.ape') ? 'ape' : result.url.includes('.m4a') ? 'm4a' : 'mp3'
-    const filename = sanitizeFilename(`${artist} - ${title}.${ext}`)
+    // 文件名加入源+歌曲id摘要，避免同名任务（不同音质/重复下载）互相覆盖
+    const idHash = String(task.musicInfo.id ?? '').replace(/[^a-zA-Z0-9]/g, '').slice(-6)
+    const filename = sanitizeFilename(`${artist} - ${title} [${task.musicInfo.source}${idHash ? '-' + idHash : ''}].${ext}`)
     const localPath = `${DOWNLOAD_DIR}/${filename}`
 
     updateTask(task.id, { status: 'downloading' })
@@ -266,7 +279,30 @@ const startDownload = async(task: DownloadTask) => {
 
     activeDownloads.set(task.id, { job, cancelled: false })
 
-    const result2 = await job.promise
+    let result2 = null as null | { statusCode: number }
+    try {
+      // iOS: job.stop() may leave job.promise pending forever; race it against
+      // an abort handle (released by pause/remove) and a hard settle timeout.
+      let abortReject: (e: Error) => void = () => {}
+      const abortPromise = new Promise<never>((_resolve, reject) => { abortReject = reject })
+      abortControllers.set(task.id, { reject: abortReject })
+      let settleTimer: ReturnType<typeof setTimeout> | null = null
+      const settleFallback = new Promise<never>((_resolve, reject) => {
+        settleTimer = setTimeout(() => { reject(new Error('下载进程无响应，已超时放弃')) }, DOWNLOAD_SETTLE_TIMEOUT)
+      })
+      try {
+        result2 = await Promise.race([job.promise, abortPromise, settleFallback])
+      } finally {
+        if (settleTimer) clearTimeout(settleTimer)
+      }
+    } catch (e) {
+      // stopped by pause/remove, or settle timeout: release the queue cleanly
+      if (cancelledTasks.has(task.id)) {
+        cancelledTasks.delete(task.id)
+        return
+      }
+      throw e
+    }
 
     if (cancelledTasks.has(task.id)) {
       cancelledTasks.delete(task.id)
@@ -274,7 +310,7 @@ const startDownload = async(task: DownloadTask) => {
       return
     }
 
-    if (result2.statusCode === 200 || result2.statusCode === 206) {
+    if (result2 && (result2.statusCode === 200 || result2.statusCode === 206)) {
       // 下载完成后保存歌词和封面
       const basePath = localPath.replace(/\.[^.]+$/, '')
 
@@ -313,12 +349,13 @@ const startDownload = async(task: DownloadTask) => {
         completedAt: Date.now(),
         speed: 0,
       })
-    } else if (result2.statusCode === 403) {
+      recordCompleted(task.musicInfo, localPath)
+    } else if (result2 && result2.statusCode === 403) {
       throw new Error('下载被禁止(403)，可能需要登录或有防盗链')
-    } else if (result2.statusCode === 404) {
+    } else if (result2 && result2.statusCode === 404) {
       throw new Error('文件不存在(404)')
     } else {
-      throw new Error(`下载失败，状态码: ${result2.statusCode}`)
+      throw new Error(`下载失败，状态码: ${result2?.statusCode ?? '未知'}`)
     }
   } catch (error) {
     if (cancelledTasks.has(task.id)) {
@@ -335,6 +372,10 @@ const startDownload = async(task: DownloadTask) => {
         retryCount: currentTask.retryCount + 1,
         errorMessage: `${msg} (重试中 ${currentTask.retryCount + 1}/${MAX_RETRY})`,
       })
+      // move retrying task to the tail so it does not starve the rest of the queue
+      const moved = tasks.filter(t => t.id !== task.id)
+      const self = tasks.find(t => t.id === task.id)
+      if (self) tasks = [...moved, self]
     } else {
       updateTask(task.id, {
         status: 'failed',
@@ -344,6 +385,7 @@ const startDownload = async(task: DownloadTask) => {
     }
   } finally {
     activeDownloads.delete(task.id)
+    abortControllers.delete(task.id)
     setTimeout(async() => processQueue(), 500)
   }
 }
@@ -393,6 +435,8 @@ export const pauseTask = (taskId: string) => {
       active.job.stop()
       activeDownloads.delete(taskId)
     }
+    // release the pending await so the queue does not deadlock on iOS
+    abortControllers.get(taskId)?.reject(new Error('task stopped'))
   }
   cancelledTasks.add(taskId)
   updateTask(taskId, { status: 'paused', speed: 0 })
@@ -401,6 +445,7 @@ export const pauseTask = (taskId: string) => {
 export const resumeTask = (taskId: string) => {
   const task = getTask(taskId)
   if (!task || task.status !== 'paused') return
+  cancelledTasks.delete(taskId)
   updateTask(taskId, { status: 'waiting', retryCount: 0 })
   void processQueue()
 }
@@ -412,10 +457,19 @@ export const removeTask = (taskId: string, deleteFile = false) => {
       const active = activeDownloads.get(taskId)
       if (active) active.job.stop()
       activeDownloads.delete(taskId)
+      // release the pending await so the queue does not deadlock on iOS
+      abortControllers.get(taskId)?.reject(new Error('task removed'))
       cancelledTasks.add(taskId)
     }
     if (deleteFile && task.localPath) {
-      RNFS.unlink(task.localPath).catch(() => {})
+      RNFS.unlink(task.localPath).catch(() => {
+        // also remove related files (lyric/cover)
+        const base = task.localPath!.replace(/\.[^.]+$/, '')
+        RNFS.unlink(base + '.lrc').catch(() => {})
+        RNFS.unlink(base + '.jpg').catch(() => {})
+        RNFS.unlink(base + '.png').catch(() => {})
+      })
+      removeCompletedFile(task.localPath)
     }
   }
   tasks = tasks.filter(t => t.id !== taskId)
@@ -441,6 +495,7 @@ export const pauseAll = () => {
 export const resumeAll = () => {
   tasks.forEach(t => {
     if (t.status === 'paused') {
+      cancelledTasks.delete(t.id)
       updateTask(t.id, { status: 'waiting', retryCount: 0 })
     }
   })
@@ -449,6 +504,7 @@ export const resumeAll = () => {
 
 export const clearCompleted = () => {
   tasks = tasks.filter(t => t.status !== 'completed')
+  clearCompletedFiles()
   notify()
 }
 
@@ -476,20 +532,13 @@ export default {
   getDownloadDir,
 }
 
-/**
- * 查询歌曲本地已下载文件路径（供播放优先本地使用）
- * 优先精确 id 匹配，其次 source+name+singer 兜底（列表转在线信息后 id 可能不同）
- */
-export const getDownloadedFilePath = async(musicInfo: LX.Music.MusicInfoOnline): Promise<string | null> => {
-  const match = (t: DownloadTask) => t.status === 'completed' && (
-    t.musicInfo.id === musicInfo.id ||
-    (t.musicInfo.source === musicInfo.source && t.musicInfo.name === musicInfo.name && t.musicInfo.singer === musicInfo.singer)
-  )
-  const task = tasks.find(match)
-  if (!task?.localPath) return null
-  const exists = await RNFS.exists(task.localPath)
-  return exists ? `file://${task.localPath}` : null
+/** 已下载（completed）歌曲标识映射（id 与 source|name|singer 双索引），供列表显示"已下载"标识 */
+export const getDownloadedIdSet = (): Set<string> => {
+  const set = new Set<string>()
+  for (const t of tasks) {
+    if (t.status !== 'completed') continue
+    set.add(t.musicInfo.id)
+    set.add(`${t.musicInfo.source}|${t.musicInfo.name}|${t.musicInfo.singer}`)
+  }
+  return set
 }
-
-/** 已下载（completed）歌曲 id 集合，供列表显示"已下载"标识 */
-export const getDownloadedIdSet = (): Set<string> => new Set(tasks.filter(t => t.status === 'completed').map(t => t.musicInfo.id))

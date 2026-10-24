@@ -9,6 +9,7 @@ import initSync from './sync'
 import initCommonState from './common'
 import { initDeeplink } from './deeplink'
 import { setApiSource } from '@/core/apiSource'
+import { loadTasks } from '@/utils/DownloadManager'
 import commonActions from '@/store/common/action'
 import settingState from '@/store/setting/state'
 import { checkUpdate } from '@/core/version'
@@ -61,7 +62,6 @@ export default async() => {
   bootLog('Common State inited.')
 
   // 加载下载任务
-  const { loadTasks } = await import('@/utils/DownloadManager')
   void loadTasks()
   bootLog('Download tasks loaded.')
 
