@@ -47,6 +47,28 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Debug RN CLI config (troubleshoot use_native_modules!)
+        shell: bash
+        run: |
+          set +e
+          echo "--- react-native config ---"
+          npx react-native config > /tmp/rnconfig.json 2>/tmp/rnconfig.err
+          echo "cli config exit: $?"
+          head -c 400 /tmp/rnconfig.err
+          echo ""
+          echo "--- node loadConfig test ---"
+          node - <<'EOF'
+          try {
+            const cli = require('@react-native-community/cli')
+            const config = cli.loadConfig({ root: process.cwd() })
+            console.log('loadConfig OK, dependencies:', Object.keys(config.dependencies || {}).length)
+          } catch (e) {
+            console.error('loadConfig FAIL:', e.message)
+          }
+          EOF
+          echo "--- pod env sanity ---"
+          node --version && ruby --version && pod --version
+
       - name: Install CocoaPods dependencies
         shell: bash
         run: |
