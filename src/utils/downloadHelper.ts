@@ -25,7 +25,8 @@ export const getAvailableQualitys = (musicInfo: { meta?: { qualitys?: unknown[] 
 }
 
 /**
- * 弹出音质选择对话框；无可用列表时直接用设置里的"优先播放的音质"
+ * 弹出音质选择对话框（始终弹出；音源未声明可用音质时提供标准 4 种，
+ * 设置里的"优先播放的音质"排在最前作为默认推荐）
  */
 export const showDownloadQualityDialog = (
   title: string,
@@ -34,14 +35,14 @@ export const showDownloadQualityDialog = (
 ) => {
   const qualitys = getAvailableQualitys(musicInfo)
   const preferred = settingState.setting['player.playQuality'] as LX.Quality | undefined
+  const options = qualitys.length ? qualitys : STANDARD_QUALITYS
+  const ordered = [...options].sort((a, b) => {
+    if (a === preferred) return -1
+    if (b === preferred) return 1
+    return 0
+  })
 
-  if (!qualitys.length) {
-    // 音源未声明可用音质：回退到设置的优先音质
-    onChoose(preferred ?? '128k')
-    return
-  }
-
-  const buttons: Array<{ text: string, onPress?: () => void, style?: 'default' | 'cancel' | 'destructive' }> = qualitys.map(q => ({
+  const buttons: Array<{ text: string, onPress?: () => void, style?: 'default' | 'cancel' | 'destructive' }> = ordered.map(q => ({
     text: QUALITY_NAMES[q] ?? q,
     onPress: () => { onChoose(q) },
   }))

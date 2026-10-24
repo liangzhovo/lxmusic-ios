@@ -41,12 +41,14 @@ const findCompletedFile = (musicInfo: { id?: string, source?: string, name?: str
 
 /**
  * 查询歌曲本地已下载文件路径（供播放优先本地使用）
+ * 返回前用 encodeURI 编码（中文/空格文件名必须编码，否则 iOS 播放器
+ * URL(string:) 解析失败导致播放卡在"获取链接中"）
  */
 export const getDownloadedFilePath = async(musicInfo: { id?: string, source?: string, name?: string, singer?: string }): Promise<string | null> => {
   const file = findCompletedFile(musicInfo)
   if (!file) return null
   const exists = await RNFS.exists(file.localPath)
-  return exists ? `file://${file.localPath}` : null
+  return exists ? `file://${encodeURI(file.localPath)}` : null
 }
 
 /** 查询歌曲本地已下载歌词文本（无网络时播放仍可显示歌词） */
@@ -66,7 +68,7 @@ export const getLocalPicPath = async(musicInfo: { id?: string, name?: string, si
   const base = file.localPath.replace(/\.[^.]+$/, '')
   for (const ext of ['.jpg', '.png']) {
     const picPath = base + ext
-    if (await RNFS.exists(picPath)) return `file://${picPath}`
+    if (await RNFS.exists(picPath)) return `file://${encodeURI(picPath)}`
   }
   return null
 }
