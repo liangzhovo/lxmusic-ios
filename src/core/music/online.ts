@@ -56,7 +56,11 @@ export const getMusicUrlInfo = async({ musicInfo, quality, isRefresh, allowToggl
   // 播放（非强制刷新）时优先使用已下载的本地文件，不联网
   if (!isRefresh) {
     try {
-      const localPath = await getDownloadedFilePath(musicInfo)
+      // 本地查询加 3 秒超时保护，防止异常挂起导致播放卡在"获取链接中"
+      const localPath = await Promise.race([
+        getDownloadedFilePath(musicInfo),
+        new Promise<string | null>(resolve => { setTimeout(() => { resolve(null) }, 3000) }),
+      ])
       if (localPath) {
         console.log('local playback hit:', localPath)
         return { url: localPath, quality: quality ?? null }
