@@ -78,14 +78,13 @@ const styles = createStyle({
   container: {
     flex: 1,
     flexDirection: 'row',
-    // 整体左右留白，避免内容贴屏幕物理边缘
-    paddingHorizontal: 20,
+    // 铺满屏幕（不设水平留白）
   },
   left: {
     flex: 1,
     width: '47%',
-    // 左侧统一参考线：返回键/功能图标/封面/进度条都从这条线开始
-    paddingLeft: 30,
+    // 左侧适度安全边距（不贴物理边缘，但不过分收窄）
+    paddingLeft: 20,
     // 底部留白：把进度条与时间顶离屏幕底边
     paddingBottom: 40,
     // backgroundColor: 'rgba(0,0,0,0.1)',
@@ -103,8 +102,8 @@ const styles = createStyle({
     width: '53%',
     flexGrow: 0,
     flexShrink: 0,
-    // 歌词区不贴屏幕右边缘
-    paddingRight: 20,
+    // 歌词区最小安全边距（基本铺满到右缘）
+    paddingRight: 10,
   },
   controlBtn: {
     flex: 1,
