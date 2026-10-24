@@ -15,7 +15,6 @@ import Pic from './Pic'
 import Lyric from './Lyric'
 import Player from './Player'
 import { createStyle } from '@/utils/tools'
-import { marginLeftRaw } from './constant'
 import { useStatusbarHeight } from '@/store/common/hook'
 // import MoreBtn from './MoreBtn2'
 
@@ -79,25 +78,33 @@ const styles = createStyle({
   container: {
     flex: 1,
     flexDirection: 'row',
+    // 整体左右留白，避免内容贴屏幕物理边缘
+    paddingHorizontal: 20,
   },
   left: {
     flex: 1,
-    width: '45%',
-    paddingBottom: 10,
+    width: '47%',
+    // 左侧统一参考线：返回键/功能图标/封面/进度条都从这条线开始
+    paddingLeft: 30,
+    // 底部留白：把进度条与时间顶离屏幕底边
+    paddingBottom: 40,
     // backgroundColor: 'rgba(0,0,0,0.1)',
   },
   leftContent: {
     flexShrink: 1,
     flexGrow: 0,
-    marginLeft: marginLeftRaw,
+    // 与 left.paddingLeft 对齐（移除旧的 15px 缩进，保证与顶部图标同一条垂直线）
+    marginLeft: 0,
     // flexDirection: 'row',
     // backgroundColor: 'rgba(0,0,0,0.1)',
     // alignItems: 'center',
   },
   right: {
-    width: '55%',
+    width: '53%',
     flexGrow: 0,
     flexShrink: 0,
+    // 歌词区不贴屏幕右边缘
+    paddingRight: 20,
   },
   controlBtn: {
     flex: 1,
