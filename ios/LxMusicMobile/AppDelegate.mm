@@ -4399,10 +4399,10 @@ RCT_REMAP_METHOD(clearNowPlayingInfo, clearNowPlayingInfoWithResolver:(RCTPromis
 RCT_EXPORT_MODULE();
 
 RCT_EXPORT_METHOD(hapticLight) {
-  // 轻微震动反馈（点击歌曲等轻交互使用）
+  // 轻微震动反馈（按键成功触发的轻触感）
   dispatch_async(dispatch_get_main_queue(), ^{
     if (@available(iOS 10.0, *)) {
-      UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+      UIImpactFeedbackGenerator *generator = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
       [generator prepare];
       [generator impactOccurred];
     }
