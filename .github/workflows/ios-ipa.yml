@@ -115,13 +115,16 @@ jobs:
         run: |
           set -e
           mkdir -p build
+          # metro appends .js to -O output
           node node_modules/metro/src/cli.js build index.js \
-            -O build/main.jsbundle -p ios -g false -z true
+            -O build/main.jsbundle.js -p ios -g false -z true
           # Hermes bytecode (RN 0.73 iOS release runs Hermes)
           HERMESC="node_modules/react-native/sdks/hermesc/osx-bin/hermesc"
           if [ -x "$HERMESC" ]; then
-            "$HERMESC" -O -emit-binary -output-source-map -out=build/main.jsbundle.hbc build/main.jsbundle
+            "$HERMESC" -O -emit-binary -output-source-map -out=build/main.jsbundle.hbc build/main.jsbundle.js
             mv build/main.jsbundle.hbc build/main.jsbundle
+          else
+            mv build/main.jsbundle.js build/main.jsbundle
           fi
           ls -la build/main.jsbundle
 
