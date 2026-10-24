@@ -213,7 +213,7 @@ const DownloadScreen: React.FC<Props> = ({ componentId }) => {
             {item.musicInfo.singer || '未知艺术家'}
           </Text>
           <Text style={[styles.status, { color: getStatusColor(item) }]} numberOfLines={1}>
-            {getStatusText(item)}
+            {item.quality ? `[${item.quality}] ` : ''}{getStatusText(item)}
           </Text>
           {(item.status === 'downloading' || item.status === 'preparing') && (
             <View style={[styles.progressBar, { backgroundColor: theme['c-border-background'] }]}>

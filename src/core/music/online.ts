@@ -14,7 +14,7 @@ import {
   handleGetOnlinePicUrl,
   getCachedLyricInfo,
 } from './utils'
-import { getDownloadedFilePath } from '@/utils/downloadLocal'
+import { getDownloadedFilePath, getLocalLyricText, getLocalPicPath } from '@/utils/downloadLocal'
 
 /* export const setMusicUrl = ({ musicInfo, type, url }: {
   musicInfo: LX.Music.MusicInfo
@@ -57,7 +57,11 @@ export const getMusicUrlInfo = async({ musicInfo, quality, isRefresh, allowToggl
   if (!isRefresh) {
     try {
       const localPath = await getDownloadedFilePath(musicInfo)
-      if (localPath) return { url: localPath, quality: quality ?? null }
+      if (localPath) {
+        console.log('local playback hit:', localPath)
+        return { url: localPath, quality: quality ?? null }
+      }
+      console.log('local playback miss:', musicInfo.id, musicInfo.name)
     } catch (e) {
       // 本地查询异常时回落到正常网络获取，避免播放卡在"获取链接中"
       console.log('local download check failed:', e)
@@ -89,6 +93,15 @@ export const getPicUrl = async({ musicInfo, listId, isRefresh, allowToggleSource
   allowToggleSource?: boolean
   onToggleSource?: (musicInfo?: LX.Music.MusicInfoOnline) => void
 }): Promise<string> => {
+  if (!isRefresh) {
+    // 优先使用下载时保存的本地封面（无网络也可显示）
+    try {
+      const localPic = await getLocalPicPath(musicInfo)
+      if (localPic) return localPic
+    } catch (e) {
+      console.log('local pic check failed:', e)
+    }
+  }
   if (musicInfo.meta.picUrl && !isRefresh) return musicInfo.meta.picUrl
   return handleGetOnlinePicUrl({ musicInfo, onToggleSource, isRefresh, allowToggleSource }).then(({ url, musicInfo: targetMusicInfo, isFromCache }) => {
     // picRequest = null
@@ -107,6 +120,13 @@ export const getLyricInfo = async({ musicInfo, isRefresh, allowToggleSource = tr
   onToggleSource?: (musicInfo?: LX.Music.MusicInfoOnline) => void
 }): Promise<LX.Player.LyricInfo> => {
   if (!isRefresh) {
+    // 优先使用下载时保存的本地歌词（无网络也可显示）
+    try {
+      const lrc = await getLocalLyricText(musicInfo)
+      if (lrc) return buildLyricInfo({ lyric: lrc })
+    } catch (e) {
+      console.log('local lyric check failed:', e)
+    }
     const lyricInfo = await getCachedLyricInfo(musicInfo)
     if (lyricInfo) return buildLyricInfo(lyricInfo)
   }

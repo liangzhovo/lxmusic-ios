@@ -20,6 +20,7 @@ export interface DownloadTask {
   downloadedBytes: number
   totalBytes: number
   speed: number
+  quality?: LX.Quality
   errorMessage?: string
   localPath?: string
   createdAt: number
@@ -122,6 +123,7 @@ const getMusicDownloadUrl = async(
   musicInfo: LX.Music.MusicInfoOnline,
   isRefresh = true,
   isRetryed = false,
+  quality?: LX.Quality,
 ): Promise<{ url: string, quality: LX.Quality | null }> => {
   const toggleMusicInfo = musicInfo.meta.toggleMusicInfo
 
@@ -129,12 +131,14 @@ const getMusicDownloadUrl = async(
   const firstTry = toggleMusicInfo
     ? getMusicUrlInfo({
       musicInfo: toggleMusicInfo,
+      quality,
       isRefresh,
       allowToggleSource: false,
     }).catch(async() => {
       // 失败后用原信息，允许切换音源
       return getMusicUrlInfo({
         musicInfo,
+        quality,
         isRefresh,
         allowToggleSource: true,
         onToggleSource() {
@@ -144,6 +148,7 @@ const getMusicDownloadUrl = async(
     })
     : getMusicUrlInfo({
       musicInfo,
+      quality,
       isRefresh,
       allowToggleSource: true,
       onToggleSource() {
@@ -156,30 +161,30 @@ const getMusicDownloadUrl = async(
     if (!isRetryed && err.message == requestMsg.tooManyRequests) {
       const time = 2 + Math.random() * 4
       await new Promise(resolve => setTimeout(resolve, time * 1000))
-      return getMusicDownloadUrl(musicInfo, isRefresh, true)
+      return getMusicDownloadUrl(musicInfo, isRefresh, true, quality)
     }
 
     // 第一次失败，再试一次
     if (!isRetryed) {
-      return getMusicDownloadUrl(musicInfo, isRefresh, true)
+      return getMusicDownloadUrl(musicInfo, isRefresh, true, quality)
     }
 
     // 第二次失败，如果不是刷新模式，用 isRefresh=true 再试一次
     if (!isRefresh) {
-      return getMusicDownloadUrl(musicInfo, true, true)
+      return getMusicDownloadUrl(musicInfo, true, true, quality)
     }
 
     throw err
   })
 }
 
-const getUrlWithTimeout = async(musicInfo: LX.Music.MusicInfoOnline): Promise<{ url: string, quality: LX.Quality | null }> => {
+const getUrlWithTimeout = async(musicInfo: LX.Music.MusicInfoOnline, quality?: LX.Quality): Promise<{ url: string, quality: LX.Quality | null }> => {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       reject(new Error('获取链接超时'))
     }, URL_TIMEOUT)
 
-    getMusicDownloadUrl(musicInfo).then(result => {
+    getMusicDownloadUrl(musicInfo, true, false, quality).then(result => {
       clearTimeout(timeout)
       resolve(result)
     }).catch(err => {
@@ -217,7 +222,7 @@ const startDownload = async(task: DownloadTask) => {
   updateTask(task.id, { status: 'preparing' })
 
   try {
-    const result = await getUrlWithTimeout(task.musicInfo)
+    const result = await getUrlWithTimeout(task.musicInfo, task.quality)
 
     if (cancelledTasks.has(task.id)) {
       cancelledTasks.delete(task.id)
@@ -390,7 +395,7 @@ const startDownload = async(task: DownloadTask) => {
   }
 }
 
-export const addDownload = (musicInfo: LX.Music.MusicInfoOnline) => {
+export const addDownload = (musicInfo: LX.Music.MusicInfoOnline, quality?: LX.Quality) => {
   const task: DownloadTask = {
     id: generateId(musicInfo),
     musicInfo,
@@ -399,6 +404,7 @@ export const addDownload = (musicInfo: LX.Music.MusicInfoOnline) => {
     downloadedBytes: 0,
     totalBytes: 0,
     speed: 0,
+    quality,
     createdAt: Date.now(),
     retryCount: 0,
   }
@@ -408,7 +414,7 @@ export const addDownload = (musicInfo: LX.Music.MusicInfoOnline) => {
   return task.id
 }
 
-export const addDownloads = (musicInfos: LX.Music.MusicInfoOnline[]) => {
+export const addDownloads = (musicInfos: LX.Music.MusicInfoOnline[], quality?: LX.Quality) => {
   const newTasks: DownloadTask[] = musicInfos.map(info => ({
     id: generateId(info),
     musicInfo: info,
@@ -417,6 +423,7 @@ export const addDownloads = (musicInfos: LX.Music.MusicInfoOnline[]) => {
     downloadedBytes: 0,
     totalBytes: 0,
     speed: 0,
+    quality,
     createdAt: Date.now(),
     retryCount: 0,
   }))

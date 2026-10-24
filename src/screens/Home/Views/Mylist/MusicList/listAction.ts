@@ -7,6 +7,7 @@ import { confirmDialog, openUrl, shareMusic, toast } from '@/utils/tools'
 import { addDislikeInfo, hasDislike } from '@/core/dislikeList'
 import playerState from '@/store/player/state'
 import { addDownload, addDownloads } from '@/utils/DownloadManager'
+import { showDownloadQualityDialog } from '@/utils/downloadHelper'
 
 import type { SelectInfo } from './ListMenu'
 import { type Metadata } from '@/components/MetadataEditModal'
@@ -162,8 +163,10 @@ const toOnlineMusicInfo = (musicInfo: LX.Music.MusicInfo): LX.Music.MusicInfoOnl
 export const handleDownload = (musicInfo: SelectInfo['musicInfo']) => {
   const online = toOnlineMusicInfo(musicInfo)
   if (!online) return
-  addDownload(online)
-  toast(`${musicInfo.name} 已添加到下载队列`)
+  showDownloadQualityDialog(musicInfo.name, online, quality => {
+    addDownload(online, quality)
+    toast(`${musicInfo.name} 已添加到下载队列`)
+  })
 }
 
 export const handleMultiDownload = (musicInfos: SelectInfo['selectedList'], onCancelSelect: () => void) => {
@@ -171,7 +174,10 @@ export const handleMultiDownload = (musicInfos: SelectInfo['selectedList'], onCa
     .map(toOnlineMusicInfo)
     .filter((m): m is LX.Music.MusicInfoOnline => m != null)
   if (list.length === 0) return
-  addDownloads(list)
-  toast(`已添加 ${list.length} 首歌曲到下载队列`)
-  onCancelSelect()
+  // 批量下载：按第一首歌的可用音质弹一次选择，应用于全部
+  showDownloadQualityDialog(`${list.length} 首歌曲`, list[0], quality => {
+    addDownloads(list, quality)
+    toast(`已添加 ${list.length} 首歌曲到下载队列`)
+    onCancelSelect()
+  })
 }

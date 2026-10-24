@@ -9,6 +9,7 @@ import MultipleModeBar, { type MultipleModeBarType, type SelectMode } from './Mu
 import { handleDislikeMusic, handlePlay, handlePlayLater, handleShare, handleShowMusicSourceDetail } from './listAction'
 import { createStyle } from '@/utils/tools'
 import DownloadManager from '@/utils/DownloadManager'
+import { showDownloadQualityDialog } from '@/utils/downloadHelper'
 
 export interface OnlineListProps {
   onRefresh: ListProps['onRefresh']
@@ -65,15 +66,19 @@ export default forwardRef<OnlineListType, OnlineListProps>(({
     setSelectedCount(0)
   }
   const handleDownload = (info: SelectInfo) => {
-    DownloadManager.addDownload(info.musicInfo)
-    Alert.alert('下载', `已添加「${info.musicInfo.name}」到下载队列`)
+    showDownloadQualityDialog(info.musicInfo.name, info.musicInfo, quality => {
+      DownloadManager.addDownload(info.musicInfo, quality)
+      Alert.alert('下载', `已添加「${info.musicInfo.name}」到下载队列`)
+    })
   }
   const handleMultiDownload = () => {
     const selectedList = listRef.current?.getSelectedList() ?? []
     if (selectedList.length === 0) return
-    DownloadManager.addDownloads(selectedList)
-    Alert.alert('下载', `已添加 ${selectedList.length} 首歌曲到下载队列`)
-    hancelExitSelect()
+    showDownloadQualityDialog(`${selectedList.length} 首歌曲`, selectedList[0], quality => {
+      DownloadManager.addDownloads(selectedList, quality)
+      Alert.alert('下载', `已添加 ${selectedList.length} 首歌曲到下载队列`)
+      hancelExitSelect()
+    })
   }
 
   const showMenu = (musicInfo: LX.Music.MusicInfoOnline, index: number, position: Position) => {

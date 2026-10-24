@@ -30,20 +30,43 @@ export const getCompletedFiles = (): CompletedFile[] => [...completedFiles]
 /** 归一化文本（用于宽松匹配：去空白、忽略大小写） */
 const norm = (s?: string | null) => String(s ?? '').replace(/\s+/g, '').toLowerCase()
 
+/** 匹配已下载文件（id 均非空才比较；name+singer 归一化兜底，忽略音源差异） */
+const findCompletedFile = (musicInfo: { id?: string, source?: string, name?: string, singer?: string }) => {
+  return completedFiles.find(f => {
+    if (f.musicInfo.id && musicInfo.id && f.musicInfo.id === musicInfo.id) return true
+    return norm(f.musicInfo.name) === norm(musicInfo.name) &&
+      norm(f.musicInfo.singer) === norm(musicInfo.singer)
+  })
+}
+
 /**
  * 查询歌曲本地已下载文件路径（供播放优先本地使用）
- * 优先精确 id 匹配（均非空才比较，避免 undefined===undefined 误匹配），
- * 其次 source+name+singer 归一化兜底（列表转在线信息后 id/大小写/空白可能不同）
  */
-export const getDownloadedFilePath = async(musicInfo: LX.Music.MusicInfoOnline): Promise<string | null> => {
-  const match = (f: CompletedFile) => {
-    if (f.musicInfo.id && musicInfo.id && f.musicInfo.id === musicInfo.id) return true
-    return norm(f.musicInfo.source) === norm(musicInfo.source) &&
-      norm(f.musicInfo.name) === norm(musicInfo.name) &&
-      norm(f.musicInfo.singer) === norm(musicInfo.singer)
-  }
-  const file = completedFiles.find(match)
+export const getDownloadedFilePath = async(musicInfo: { id?: string, source?: string, name?: string, singer?: string }): Promise<string | null> => {
+  const file = findCompletedFile(musicInfo)
   if (!file) return null
   const exists = await RNFS.exists(file.localPath)
   return exists ? `file://${file.localPath}` : null
+}
+
+/** 查询歌曲本地已下载歌词文本（无网络时播放仍可显示歌词） */
+export const getLocalLyricText = async(musicInfo: { id?: string, name?: string, singer?: string }): Promise<string | null> => {
+  const file = findCompletedFile(musicInfo)
+  if (!file) return null
+  const base = file.localPath.replace(/\.[^.]+$/, '')
+  const lrcPath = base + '.lrc'
+  if (await RNFS.exists(lrcPath)) return RNFS.readFile(lrcPath, 'utf8')
+  return null
+}
+
+/** 查询歌曲本地已下载封面路径（无网络时播放仍可显示封面） */
+export const getLocalPicPath = async(musicInfo: { id?: string, name?: string, singer?: string }): Promise<string | null> => {
+  const file = findCompletedFile(musicInfo)
+  if (!file) return null
+  const base = file.localPath.replace(/\.[^.]+$/, '')
+  for (const ext of ['.jpg', '.png']) {
+    const picPath = base + ext
+    if (await RNFS.exists(picPath)) return `file://${picPath}`
+  }
+  return null
 }
