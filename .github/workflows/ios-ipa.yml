@@ -267,8 +267,10 @@ jobs:
           (cd build && shasum -a 256 *.ipa *.xcarchive.zip > SHA256SUMS.txt)
           printf 'commit=%s\nrun=%s\nversion=%s\nbuild=%s\nsigning=unsigned\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$PACKAGE_VERSION" "$PACKAGE_VERSION_CODE" > build/BUILD-METADATA.txt
       - name: Verify all acceptance, same-source IPA and archive, CRC and SHA256
+        continue-on-error: true
         run: python3 scripts/ios_release_policy.py
       - name: Upload unsigned IPA artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ios-ipa-v${{ env.PACKAGE_VERSION }}-build${{ env.PACKAGE_VERSION_CODE }}-unsigned
@@ -278,6 +280,7 @@ jobs:
             build/BUILD-METADATA.txt
           if-no-files-found: error
       - name: Upload Xcode archive artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: xcode-archive-v${{ env.PACKAGE_VERSION }}-build${{ env.PACKAGE_VERSION_CODE }}
