@@ -1,7 +1,7 @@
 name: Build iOS IPA + Xcode Archive
 on:
   push:
-    branches: [master]
+    branches: [master, skyhc-download]
     tags: ['v*']
   workflow_dispatch:
 permissions:
