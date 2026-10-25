@@ -1,0 +1,16 @@
+{
+  "baseline": "232f0b80ee5a5794278bd2083921829808066d60",
+  "path": "ios/LxMusicMobile/AppDelegate.mm",
+  "scope": "Remove exactly the #if TARGET_OS_SIMULATOR LXPlaybackTestSupport block through its matching #endif, retaining the following newline. AppDelegate and LXSceneDelegate remain included.",
+  "originalFileSHA256": "e20f48fd9528a2f9414afd7ad33f268b266533e8238775285f56f6d85fde7614",
+  "reviewedFileSHA256": "5764c47479c8dd7ec4de68de512b32af03ce667caaebcf3b9bf77a625024ea3a",
+  "originalProductionSHA256": "524ed3fb5c1e907fbd5c731e4016534f3bc2dcce649287ed5960860824f0aaaf",
+  "reviewedProductionSHA256": "524ed3fb5c1e907fbd5c731e4016534f3bc2dcce649287ed5960860824f0aaaf",
+  "productionUnchanged": true,
+  "runtimeEvidenceRun64": {
+    "actual": "<UISceneWindowingControlStyle: 0x6000000058c0; type: minimal>",
+    "expected": "<UISceneWindowingControlStyle: 0x600000006f00; type: minimal>",
+    "isEqual": false
+  },
+  "verification": "Fixed-SDK simulator reads descriptor type and validates minimal/automatic factory diagnostics; device production code is unchanged."
+}

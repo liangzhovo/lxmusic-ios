@@ -1,0 +1,8 @@
+{
+  "README.md": "ff69bbaae4c24281fa436b7a4ab9a4c44f4cc118bb24c91305836cccbe7164d6",
+  "src/plugins/player/playList.ts": "eb83dc190c9c3f16fac9a709d8acf694a6d6f40eccc79834c7f38e514fc880c2",
+  "src/screens/PlayDetail/Horizontal/components/PlaylistBtn.tsx": "502bac84ed618458a1961c4774b7ba0c091aaf81ba429b0ffb94d4596c76b9c9",
+  "src/plugins/player/cache/index.ts": "eefa6b3a338284f62713aaf1c40f74c0ae3bdada91500bcd32ddeffeada2ee40",
+  "ios/LxMusicMobile/Info.plist": "8935f0d0414a727f3208cb59ab92e5c65d8585e5fbff6755cee7ffdb35c7f834",
+  "dependencies-patch.js": "61641e6b47a5585adcd5fa65480291d3e6ecd083f2adef3d0b3c46d2431258fc"
+}

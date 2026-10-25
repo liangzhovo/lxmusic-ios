@@ -1,0 +1,49 @@
+{
+  "repository": "skyhc/lx-music-mobile",
+  "main_branch": "master",
+  "build_commit": "a29a9d758fd601d42fd22a4a5e1d009537a2df73",
+  "run_id": 35008293921,
+  "run_number": 88,
+  "version": "1.9.0",
+  "build": "87",
+  "tag": "v1.9.0-ios-build87",
+  "release_name": "LX Music iOS / iPadOS v1.9.0 · Build87 (unsigned)",
+  "notes": "docs/releases/BUILD87.md",
+  "porting_notes": "docs/IOS_IPADOS_PORT.md",
+  "artifacts": {
+    "ipa": {
+      "id": 10412914329,
+      "name": "ios-ipa-v1.9.0-build87-unsigned",
+      "sha256": "e6931245cd5513a25de300637295aa291a2d9498fa2044f5b606ec69e938cc45"
+    },
+    "archive": {
+      "id": 10413198489,
+      "name": "xcode-archive-v1.9.0-build87",
+      "sha256": "a5a519954b90454cc3a4b00027989423b1606838e6f4a40b3a57225dcb6141b1"
+    },
+    "ui": {
+      "id": 10414005503,
+      "name": "ui-evidence-a29a9d758fd601d42fd22a4a5e1d009537a2df73",
+      "sha256": "aeeb75e31f024e04c4bb9ff458338b0a89b647dc63d4fc2777648fbad543b97e"
+    },
+    "playback": {
+      "id": 10413442199,
+      "name": "playback-validation-a29a9d758fd601d42fd22a4a5e1d009537a2df73",
+      "sha256": "70b7ba825f2fade741de88188ccc0beefc60c4bfd8a821774690147e3d32d6fa"
+    }
+  },
+  "binaries": {
+    "lx-music-mobile-v1.9.0-build87-ios-unsigned.ipa": "98f4bdfc8485f24fb67c3dcd97244302a56861daba4e28c45d3028e99dead575",
+    "LX-Music-v1.9.0-build87.xcarchive.zip": "32c6683e6e66de9bf9e173f452f248075e73be61650f7db878aeeec0e9f41b29"
+  },
+  "archive_prefix": "archive/2026-09-16/",
+  "old_main": "2a4fa5ba5eade0dc504b5aba098fcf05743ed1e9",
+  "old_branches": {
+    "codex/ios-upstream-1.9.0": "a29a9d758fd601d42fd22a4a5e1d009537a2df73",
+    "codex/ipad-player-layout-cache-review": "6cc033e7e2299ade05c02820ed7590dc564fa927",
+    "ios-adaptation": "7e9a34f79a1126b23bce773dbf7a17b49796dc91",
+    "ipad-landscape": "3f008d3599f29ceeaf7925e5935882a78a3052ff",
+    "ipad-landscape-ui-kb-work": "4bfe338df6e9c01fa69d9e506dfb04283e04e2ce",
+    "ipad-playdetail-prototype": "d9cf9f3b881b1ab45674662977f8ca9be3c21655"
+  }
+}

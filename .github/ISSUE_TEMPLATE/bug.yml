@@ -1,0 +1,38 @@
+name: iOS / iPadOS 问题反馈
+description: 报告本社区移植版的问题；请先搜索本仓库 Issues。
+title: "[iOS Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: "请勿上传证书私钥、配对密码、音源密钥或私人歌单。本仓库为 skyhc 维护的社区移植，不是上游官方 iOS 应用。"
+  - type: input
+    id: version
+    attributes:
+      label: 应用版本与 Build
+      placeholder: 例如 1.9.0 / Build87
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: 设备型号与系统版本
+      placeholder: 例如 iPad Pro / iPadOS 26，或 iPhone / iOS 18
+    validations:
+      required: true
+  - type: input
+    id: install
+    attributes:
+      label: 安装方式与窗口状态
+      placeholder: 自行签名方式、全屏 / 分屏 / 浮动窗口、横屏 / 竖屏
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤、预期结果与实际结果
+      description: 音频问题请附格式、是否缓存及是否使用外接键盘；主题问题请附系统外观和主题模式。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 截图或脱敏日志
+      description: 请删除凭证、个人地址及私人数据后再提交。

@@ -1,0 +1,17 @@
+name: Verify historical Build87 publication policy (read only)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  historical-policy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Retain original publication validation without republishing Build87
+        run: python3 scripts/check_ios_publication.py
+      - name: Explain the new single-build publication path
+        run: |
+          echo 'The existing Build87 Release is retained unchanged.'
+          echo 'New Build88+ packages are published only by the complete iOS workflow after native and binary acceptance.'

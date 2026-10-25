@@ -1,0 +1,299 @@
+name: Build iOS IPA + Xcode Archive
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+permissions:
+  contents: write
+  actions: read
+concurrency:
+  group: ios-archive-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build-ios-ipa:
+    name: iOS IPA + Xcode Archive
+    if: "!startsWith(github.event.head_commit.message, 'ci: stage Build')"
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      NO_FLIPPER: 1
+      IOS_SCHEME: LxMusicMobile
+      IOS_WORKSPACE: ios/LxMusicMobile.xcworkspace
+      IOS_BUNDLE_IDENTIFIER: com.skyhc.lxmusic
+      IOS_TEAM_ID: LW54AZ8PXT
+      DERIVED_DATA_PATH: build/DerivedData
+      UNSIGNED_ARCHIVE_PATH: build/LxMusicMobile-unsigned.xcarchive
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Snapshot exact build source
+        run: git archive --format=zip --output=lx-build-source.zip HEAD
+      - name: Upload build source snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-${{ github.sha }}
+          path: lx-build-source.zip
+          retention-days: 7
+          if-no-files-found: error
+      - name: Select Xcode 26.6
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+      - name: Fix Swift compatibility libraries
+        shell: bash
+        run: |
+          set -euo pipefail
+          TOOLCHAIN="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphoneos"
+          SDK="$(xcrun --sdk iphoneos --show-sdk-path)/usr/lib/swift"
+          LIBS=(libswiftCompatibility50.a libswiftCompatibility51.a libswiftCompatibility56.a libswiftCompatibilityConcurrency.a libswiftCompatibilityDynamicReplacements.a libswiftCompatibilityPacks.a)
+          for LIB in "${LIBS[@]}"; do
+            SRC="$TOOLCHAIN/$LIB"
+            DST="$SDK/$LIB"
+            TBD="${DST%.a}.tbd"
+            if [ -f "$SRC" ] && [ ! -e "$DST" ] && [ ! -e "$TBD" ]; then sudo ln -s "$SRC" "$DST"; fi
+          done
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.2"
+          bundler-cache: true
+      - name: Install dependencies
+        run: npm ci
+      - name: Test persistent cache and iPad integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/checks
+          node scripts/check-audio-cache.js 2>&1 | tee build/checks/audio-cache.log
+          node scripts/check-ipad-player-layout.js 2>&1 | tee build/checks/ipad-player.log
+          node scripts/check-ipad-window-layout.js 2>&1 | tee build/checks/ipad-window.log
+          node scripts/check-build78-integration.js 2>&1 | tee build/checks/integration.log
+          node scripts/check-build79-regressions.js 2>&1 | tee build/checks/build79-regressions.log
+          node scripts/check-build80-regressions.js 2>&1 | tee build/checks/build80-regressions.log
+          node scripts/check-build81-regressions.js 2>&1 | tee build/checks/build81-regressions.log
+          node scripts/check-build82-regressions.js 2>&1 | tee build/checks/build82-regressions.log
+          node scripts/check-mylist-location.js 2>&1 | tee build/checks/mylist-location.log
+          node scripts/check-build88-cover.js 2>&1 | tee build/checks/build88-cover.log
+          node scripts/check-library-state.js 2>&1 | tee build/checks/library-state.log
+          node scripts/check-library-integration.js 2>&1 | tee build/checks/library-integration.log
+          python3 scripts/check-ios-release-policy.py 2>&1 | tee build/checks/release-policy-tests.log
+          python3 scripts/check-simulator-keychain.py 2>&1 | tee build/checks/simulator-keychain-tests.log
+          node scripts/check-build84-regressions.js | tee build/checks/build84.log
+          node scripts/check-build85-regressions.js | tee build/checks/build85.log
+          node scripts/check-build86-regressions.js | tee build/checks/build86.log
+          node scripts/check-build87-regressions.js | tee build/checks/build87.log
+          node scripts/check-track-player-queue.js | tee build/checks/track-player-queue.log
+          node scripts/check-sync-catalog-race.js | tee build/checks/sync-catalog-race.log
+          node scripts/check-sync-smoke-diagnostics.js | tee build/checks/sync-smoke-diagnostics.log
+          node scripts/check-settings-preservation.js | tee build/checks/settings-audit.log
+          node scripts/check-upstream190.js 2>&1 | tee build/checks/upstream190.log
+          npx tsc --strict --noEmit --skipLibCheck --moduleResolution node --target ES2020 src/plugins/player/cache/DiskAudioCache.ts
+      - name: Check full-project TypeScript regressions
+        run: node scripts/check-type-regressions.js
+      - name: Test production WebDAV, resume and encrypted restore with the Apple SDK
+        run: python3 scripts/check-library-native.py
+      - name: Upload validation reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-${{ github.sha }}
+          path: build/checks
+          if-no-files-found: ignore
+      - name: Install CocoaPods dependencies
+        run: cd ios && bundle exec pod install --repo-update
+      - name: Build simulator app for real playback regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -workspace "$IOS_WORKSPACE" -scheme "$IOS_SCHEME" -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath build/Simulator \
+            ARCHS=arm64 ONLY_ACTIVE_ARCH=YES PRODUCT_BUNDLE_IDENTIFIER="$IOS_BUNDLE_IDENTIFIER" \
+            TARGETED_DEVICE_FAMILY="1,2" IPHONEOS_DEPLOYMENT_TARGET=15.0 \
+            MARKETING_VERSION="$(node -p "require('./package.json').version")" \
+            CURRENT_PROJECT_VERSION="$(node -p "require('./package.json').versionCode")" \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" CODE_SIGN_IDENTITY="-" \
+            CODE_SIGNING_ALLOWED=YES CODE_SIGNING_REQUIRED=YES build 2>&1 | tee build/checks/simulator-build.log
+          python3 scripts/verify-simulator-keychain.py build/Simulator/Build/Products/Release-iphonesimulator/LxMusicMobile.app
+          python3 - <<'PYTHON'
+          import plistlib, pathlib
+          info = plistlib.loads(pathlib.Path('build/Simulator/Build/Products/Release-iphonesimulator/LxMusicMobile.app/Info.plist').read_bytes())
+          assert sorted(info['UIDeviceFamily']) == [1, 2], info.get('UIDeviceFamily')
+          print('Simulator app uses the same iPhone+iPad device families as the device archive.')
+          PYTHON
+      - name: Test actual App library, downloads, encrypted cold restore and offline restart
+        run: python3 scripts/run-ios-library-smoke.py
+      - name: Prepare pinned official sync server for native interoperability
+        run: |
+          set -euo pipefail
+          git clone https://github.com/lyswhut/lx-music-sync-server.git build/official-sync
+          git -C build/official-sync checkout --detach d47aca4284a7c4d9ef755df1f44fb0b0a5b2af36
+          test "$(git -C build/official-sync rev-parse HEAD)" = d47aca4284a7c4d9ef755df1f44fb0b0a5b2af36
+          cd build/official-sync
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: Test native authentication, themes, streaming and offline restart
+        run: bash scripts/run-ios-playback-smoke.sh
+      - name: Verify and inventory visual evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PYTHON'
+          import hashlib, json, os, pathlib
+          root = pathlib.Path('build/checks')
+          images = sorted(root.glob('ui-*.png'))
+          assert len(images) == 54, f'Expected 54 screenshots, got {len(images)}'
+          records = []
+          for image in images:
+              raw = image.read_bytes()
+              assert raw.startswith(b'\x89PNG\r\n\x1a\n') and len(raw) > 1024, image.name
+              report = image.with_suffix('.json')
+              data = json.loads(report.read_text())
+              assert data.get('success'), (image.name, data)
+              records.append({'image': image.name, 'bytes': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(), 'report': report.name})
+          for name in ('system-theme', 'system-theme-restart'):
+              feature = json.loads((root / f'{name}.json').read_text())
+              assert feature.get('success') and feature.get('done'), (name, feature)
+          for phase in ('online', 'offline'):
+              report = json.loads((root / f'playback-{phase}.json').read_text())
+              assert report.get('success') and report.get('done'), (phase, report)
+          (root / 'UI-MANIFEST.json').write_text(json.dumps({'commit': os.environ['GITHUB_SHA'], 'run': os.environ['GITHUB_RUN_ID'], 'count': len(images), 'screenshots': records}, indent=2))
+          print('54 PNG screenshots, their runtime reports and both playback records verified.')
+          PYTHON
+      - name: Upload individual UI screenshots and runtime records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-evidence-${{ github.sha }}
+          path: |
+            build/checks/ui-*.png
+            build/checks/ui-*.json
+            build/checks/playback-*.json
+            build/checks/UI-MANIFEST.json
+            build/checks/build86-colours.json
+            build/checks/feature-theme-*.png
+            build/checks/system-theme*.json
+            build/checks/feature-library-*.png
+            build/checks/library-*.json
+            build/checks/library-native-*.log
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload simulator and regression evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playback-validation-${{ github.sha }}
+          path: build/checks
+          if-no-files-found: ignore
+      - name: Read package version
+        run: |
+          echo "PACKAGE_VERSION=$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
+          echo "PACKAGE_VERSION_CODE=$(node -p "require('./package.json').versionCode")" >> "$GITHUB_ENV"
+      - name: Build unsigned Xcode archive
+        shell: bash
+        run: |
+          mkdir -p build
+          rm -rf "$UNSIGNED_ARCHIVE_PATH"
+          set -o pipefail
+          xcodebuild -workspace "$IOS_WORKSPACE" -scheme "$IOS_SCHEME" \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath "$UNSIGNED_ARCHIVE_PATH" -derivedDataPath "$DERIVED_DATA_PATH" \
+            DEVELOPMENT_TEAM="$IOS_TEAM_ID" CODE_SIGN_STYLE=Automatic \
+            PRODUCT_BUNDLE_IDENTIFIER="$IOS_BUNDLE_IDENTIFIER" TARGETED_DEVICE_FAMILY="1,2" \
+            IPHONEOS_DEPLOYMENT_TARGET=15.0 MARKETING_VERSION="$PACKAGE_VERSION" \
+            CURRENT_PROJECT_VERSION="$PACKAGE_VERSION_CODE" CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO clean archive 2>&1 | tee build/xcodebuild.log
+      - name: Show first Xcode errors
+        if: failure()
+        run: grep -n -C 3 "error:" build/xcodebuild.log | head -120 || true
+      - name: Upload Xcode build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log-${{ github.run_number }}
+          path: build/xcodebuild.log
+          if-no-files-found: ignore
+      - name: Attach distribution team metadata
+        run: |
+          set -euo pipefail
+          ARCHIVE_INFO="$UNSIGNED_ARCHIVE_PATH/Info.plist"
+          test -f "$ARCHIVE_INFO"
+          if /usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:Team' "$ARCHIVE_INFO" >/dev/null 2>&1; then
+            /usr/libexec/PlistBuddy -c "Set :ApplicationProperties:Team $IOS_TEAM_ID" "$ARCHIVE_INFO"
+          else
+            /usr/libexec/PlistBuddy -c "Add :ApplicationProperties:Team string $IOS_TEAM_ID" "$ARCHIVE_INFO"
+          fi
+      - name: Verify iPad archive metadata
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find "$UNSIGNED_ARCHIVE_PATH/Products/Applications" -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :ApplicationProperties:Team' "$UNSIGNED_ARCHIVE_PATH/Info.plist")" = "$IOS_TEAM_ID"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP_PATH/Info.plist")" = "$IOS_BUNDLE_IDENTIFIER"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :MinimumOSVersion' "$APP_PATH/Info.plist")" = "15.0"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP_PATH/Info.plist")" = "$PACKAGE_VERSION_CODE"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Info.plist")" = "$PACKAGE_VERSION"
+          DEVICE_FAMILY="$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily' "$APP_PATH/Info.plist")"
+          echo "$DEVICE_FAMILY" | grep -q '1'
+          echo "$DEVICE_FAMILY" | grep -q '2'
+          test -s "$APP_PATH/main.jsbundle"
+      - name: Embed exact source and run in the unsigned app
+        run: python3 scripts/ios_release_policy.py --stamp-archive
+      - name: Package unsigned IPA
+        run: |
+          set -euo pipefail
+          APP_PATH="$(find "$UNSIGNED_ARCHIVE_PATH/Products/Applications" -maxdepth 1 -name '*.app' -print -quit)"
+          test -n "$APP_PATH"
+          rm -rf build/Payload
+          mkdir -p build/Payload
+          ditto "$APP_PATH" "build/Payload/$(basename "$APP_PATH")"
+          (cd build && zip -qry "lx-music-mobile-v${PACKAGE_VERSION}-build${PACKAGE_VERSION_CODE}-ios-unsigned.ipa" Payload)
+      - name: Package Xcode archive for download
+        run: |
+          set -euo pipefail
+          ARCHIVE_ZIP="build/LX-Music-v${PACKAGE_VERSION}-build${PACKAGE_VERSION_CODE}.xcarchive.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$UNSIGNED_ARCHIVE_PATH" "$ARCHIVE_ZIP"
+          test -s "$ARCHIVE_ZIP"
+          (cd build && shasum -a 256 *.ipa *.xcarchive.zip > SHA256SUMS.txt)
+          printf 'commit=%s\nrun=%s\nversion=%s\nbuild=%s\nsigning=unsigned\n' "$GITHUB_SHA" "$GITHUB_RUN_ID" "$PACKAGE_VERSION" "$PACKAGE_VERSION_CODE" > build/BUILD-METADATA.txt
+      - name: Verify all acceptance, same-source IPA and archive, CRC and SHA256
+        run: python3 scripts/ios_release_policy.py
+      - name: Upload unsigned IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa-v${{ env.PACKAGE_VERSION }}-build${{ env.PACKAGE_VERSION_CODE }}-unsigned
+          path: |
+            build/lx-music-mobile-v${{ env.PACKAGE_VERSION }}-build${{ env.PACKAGE_VERSION_CODE }}-ios-unsigned.ipa
+            build/SHA256SUMS.txt
+            build/BUILD-METADATA.txt
+          if-no-files-found: error
+      - name: Upload Xcode archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcode-archive-v${{ env.PACKAGE_VERSION }}-build${{ env.PACKAGE_VERSION_CODE }}
+          path: |
+            build/LX-Music-v${{ env.PACKAGE_VERSION }}-build${{ env.PACKAGE_VERSION_CODE }}.xcarchive.zip
+            build/SHA256SUMS.txt
+            build/BUILD-METADATA.txt
+          if-no-files-found: error
+      - name: Publish verified Build88 packages without rebuilding or replacing Build87
+        if: (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/v')) && hashFiles('docs/BUILD88_UI_HOLD.md') == ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/ios_release_policy.py --publish
+      - name: Upload final binary and publication validation records
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validation-${{ github.sha }}
+          path: |
+            build/checks/release-validation.json
+            build/checks/BUILD88-ACCEPTANCE.json
+            build/checks/publication.json
+          if-no-files-found: ignore

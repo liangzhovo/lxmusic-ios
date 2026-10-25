@@ -1,0 +1,42 @@
+name: Build88 incremental regression
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'src/**'
+      - 'scripts/check-player-bar-theme.js'
+      - 'scripts/check-mylist-location.js'
+      - 'scripts/check-build81-regressions.js'
+      - 'scripts/check-build82-regressions.js'
+      - 'scripts/check-build88-cover.js'
+      - 'scripts/check-sync-smoke-diagnostics.js'
+      - 'scripts/sync-fixture-audit.cjs'
+      - 'scripts/sync-peer-fixture.cjs'
+      - 'scripts/check-library-*.js'
+      - 'scripts/*release*policy*.py'
+      - 'scripts/native-build88-*'
+      - 'ios/LxMusicMobile/LX*'
+      - '.github/workflows/build88-unit.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build88-regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - run: node scripts/check-player-bar-theme.js
+      - run: node scripts/check-build81-regressions.js
+      - run: node scripts/check-build82-regressions.js
+      - run: node scripts/check-mylist-location.js
+      - run: node scripts/check-build88-cover.js
+      - run: node scripts/check-sync-smoke-diagnostics.js
+      - run: node scripts/check-library-state.js
+      - run: node scripts/check-library-integration.js
+      - run: python3 scripts/check-ios-release-policy.py

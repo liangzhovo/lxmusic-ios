@@ -1,0 +1,26 @@
+{
+  "baseSHA256": "5764c47479c8dd7ec4de68de512b32af03ce667caaebcf3b9bf77a625024ea3a",
+  "scope": "Only pre-bridge transactional restore and simulator-only library argument. Every other native byte remains the historical audio/crypto/scene baseline.",
+  "replacements": [
+    {
+      "old": "",
+      "new": "  NSString *libraryPhase = @\"\";\n  for (NSString *arg in args) if ([arg hasPrefix:@\"--lx-library=\"]) libraryPhase = [arg substringFromIndex:13];\n"
+    },
+    {
+      "old": "",
+      "new": "            @\"libraryPhase\": libraryPhase,\n"
+    },
+    {
+      "old": "",
+      "new": "// Cold restore completes before any RCTBridge/AsyncStorage instance exists.\n@interface LXRestoreBootstrap : NSObject\n+ (void)prepare:(void (^)(NSError *error))completion;\n@end\n\n"
+    },
+    {
+      "old": "",
+      "new": "  static BOOL starting = NO;\n"
+    },
+    {
+      "old": "  RCTBridge *bridge = [[RCTBridge alloc] initWithDelegate:self launchOptions:launchOptions];\n  [ReactNativeNavigation bootstrapWithBridge:bridge];\n",
+      "new": "  if (starting) return;\n  starting = YES;\n  [LXRestoreBootstrap prepare:^(NSError *error) {\n    if (error != nil) {\n      UIViewController *screen = [UIViewController new];\n      screen.view.backgroundColor = UIColor.systemBackgroundColor;\n      UILabel *message = [UILabel new];\n      message.text = error.localizedDescription;\n      message.numberOfLines = 0;\n      message.textAlignment = NSTextAlignmentCenter;\n      message.textColor = UIColor.labelColor;\n      message.translatesAutoresizingMaskIntoConstraints = NO;\n      [screen.view addSubview:message];\n      [NSLayoutConstraint activateConstraints:@[\n        [message.leadingAnchor constraintEqualToAnchor:screen.view.safeAreaLayoutGuide.leadingAnchor constant:24],\n        [message.trailingAnchor constraintEqualToAnchor:screen.view.safeAreaLayoutGuide.trailingAnchor constant:-24],\n        [message.centerYAnchor constraintEqualToAnchor:screen.view.centerYAnchor]\n      ]];\n      self.window.rootViewController = screen;\n      [self.window makeKeyAndVisible];\n      return; // Retain rollback files; do not boot into partially restored data.\n    }\n    RCTBridge *bridge = [[RCTBridge alloc] initWithDelegate:self launchOptions:launchOptions];\n    [ReactNativeNavigation bootstrapWithBridge:bridge];\n  }];\n"
+    }
+  ]
+}

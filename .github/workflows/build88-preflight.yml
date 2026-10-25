@@ -1,0 +1,56 @@
+name: Prepare Build88 migration sources
+on:
+  push:
+    branches: [master]
+    paths: ['.github/workflows/build88-preflight.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build88-preflight
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - name: Fetch pinned upstream source for cross-checking
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build/upstream
+          git clone --filter=blob:none --no-checkout https://github.com/any-listen/any-listen.git build/any-listen
+          git -C build/any-listen checkout --detach 9e8e48a6307dad6de46cc549ad24528ca0f6193d
+          test "$(git -C build/any-listen rev-parse HEAD)" = 9e8e48a6307dad6de46cc549ad24528ca0f6193d
+          git -C build/any-listen archive --format=tar.gz --output="$GITHUB_WORKSPACE/build/upstream/any-listen.tar.gz" HEAD
+          git clone --filter=blob:none --no-checkout https://github.com/lyswhut/lx-music-desktop.git build/lx-desktop
+          git -C build/lx-desktop checkout --detach abcbf5fa00b0b9f2c532a80b10ad8906ee4b22ab
+          test "$(git -C build/lx-desktop rev-parse HEAD)" = abcbf5fa00b0b9f2c532a80b10ad8906ee4b22ab
+          git -C build/lx-desktop archive --format=tar.gz --output="$GITHUB_WORKSPACE/build/upstream/lx-desktop.tar.gz" HEAD
+          printf '%s\n' 'any-listen=9e8e48a6307dad6de46cc549ad24528ca0f6193d' 'lx-desktop=abcbf5fa00b0b9f2c532a80b10ad8906ee4b22ab' > build/upstream/REFS.txt
+          (cd build/upstream && sha256sum *.tar.gz > SHA256SUMS.txt)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build88-pinned-upstreams
+          path: build/upstream
+          if-no-files-found: error
+          retention-days: 7
+      - name: Install and archive exact locked JavaScript dependencies for offline checks
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          tar -czf build/node-dependencies.tar.gz node_modules
+          sha256sum build/node-dependencies.tar.gz > build/node-dependencies.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: build88-node-dependencies
+          path: |
+            build/node-dependencies.tar.gz
+            build/node-dependencies.sha256
+          if-no-files-found: error
+          retention-days: 3
