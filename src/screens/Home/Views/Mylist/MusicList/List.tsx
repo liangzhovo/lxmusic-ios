@@ -14,7 +14,8 @@ import type { Position } from './ListMenu'
 import type { SelectMode } from './MultipleModeBar'
 import { useActiveListId } from '@/store/list/hook'
 import { useSettingValue } from '@/store/setting/hook'
-import { getTasks, subscribe } from '@/utils/DownloadManager'
+import { getDownloadedIdSet, subscribe } from '@/utils/DownloadManager'
+import { getLocalDownloadedSignature, loadLocalDownloadIndex } from '@/utils/downloadLocal'
 
 type FlatListType = FlatListProps<LX.Music.MusicInfo>
 
@@ -44,19 +45,22 @@ const usePlayIndex = () => {
   return playIndex
 }
 
-/** 已下载歌曲标识映射（id + source|name|singer 双索引，订阅下载任务变化） */
+/** 已下载歌曲标识映射（id + source|name|singer 双索引，来自本地下载索引） */
 const useDownloadedMap = () => {
   const [downloadedMap, setDownloadedMap] = useState<Record<string, boolean>>({})
+  const signatureRef = useRef('')
   useEffect(() => {
     const update = () => {
+      // 仅当"已下载集合"变化时才重建映射，避免下载进度通知导致整列表重渲染
+      const signature = getLocalDownloadedSignature()
+      if (signature === signatureRef.current) return
+      signatureRef.current = signature
       const map: Record<string, boolean> = {}
-      for (const t of getTasks()) {
-        if (t.status !== 'completed') continue
-        map[t.musicInfo.id] = true
-        map[`${t.musicInfo.source}|${t.musicInfo.name}|${t.musicInfo.singer}`] = true
-      }
+      for (const id of getDownloadedIdSet()) map[id] = true
       setDownloadedMap(map)
     }
+    // 索引可能尚未加载完成，先刷新一次再订阅
+    void loadLocalDownloadIndex().then(update).catch(() => {})
     update()
     const unsubscribe = subscribe(update)
     return () => {

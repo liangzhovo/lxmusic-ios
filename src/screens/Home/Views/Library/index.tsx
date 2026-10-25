@@ -6,12 +6,11 @@ import { useMyList } from '@/store/list/hook'
 import { setActiveList } from '@/core/list'
 import { setNavActiveId } from '@/core/common'
 import { useLibraryPage } from '@/core/library/page'
-import Downloads from './Downloads'
 import { selectFile } from '@/utils/fs'
 import { shareFile } from '@/utils/nativeModules/utils'
 import {
-  addPublished, armRestore, browseDirectory, cancelRestore, clearCache, createEncryptedBackup, downloadQueue,
-  fetchBackup, importEntries, initializeLibrary, localDownloadPath, removeAccount, restoreStatus, saveAccount,
+  armRestore, browseDirectory, cancelRestore, clearCache, createEncryptedBackup, downloadQueue,
+  fetchBackup, importEntries, initializeLibrary, removeAccount, restoreStatus, saveAccount,
   setCacheLimit, stageEncryptedRestore, uploadBackup, useDownloadQueue, useLibrary,
 } from '@/core/library'
 import type { BackupFile, DirectoryEntry, LibraryAccount, RestoreStatus, TransferProgress } from '@/core/library/types'
@@ -41,10 +40,13 @@ function Toggle({ title, value, onChange, disabled, id }: { title: string, value
 const row = { flexDirection: 'row' as const, flexWrap: 'wrap' as const, marginVertical: 6 }
 const emptyAccount = { name: 'WebDAV', endpoint: 'https://', username: '', allowHTTP: false, directoryCache: true, audioCache: true }
 
+/** 下载能力已统一到「下载管理」，媒体库不再提供下载 tab；历史入口一律回到 WebDAV tab */
+const normalizeLibraryTab = (tab?: 'webdav' | 'downloads' | 'backup'): 'webdav' | 'backup' => tab === 'backup' ? 'backup' : 'webdav'
+
 export default function Library({ initialTab }: { initialTab?: 'webdav' | 'downloads' | 'backup' } = {}) {
   const theme = useTheme(), library = useLibrary(), queue = useDownloadQueue(), lists = useMyList()
   const requested = useLibraryPage()
-  const [tab, setTab] = useState<'webdav' | 'downloads' | 'backup'>(initialTab ?? requested.tab)
+  const [tab, setTab] = useState<'webdav' | 'backup'>(normalizeLibraryTab(initialTab ?? requested.tab))
   const [busy, setBusy] = useState(false), [message, setMessage] = useState(''), [progress, setProgress] = useState<TransferProgress>()
   const [editing, setEditing] = useState<Partial<LibraryAccount> | null>(null), [accountPassword, setAccountPassword] = useState(''), [passwordEdited, setPasswordEdited] = useState(false)
   const [accountId, setAccountId] = useState(''), [path, setPath] = useState(''), [entries, setEntries] = useState<DirectoryEntry[]>([]), [selected, setSelected] = useState<string[]>([])
@@ -56,7 +58,7 @@ export default function Library({ initialTab }: { initialTab?: 'webdav' | 'downl
   const [restorePath, setRestorePath] = useState(''), [backupEntries, setBackupEntries] = useState<DirectoryEntry[]>([])
   const pendingDirectory = useRef<ReturnType<typeof browseDirectory>>(), directoryGeneration = useRef(0), mounted = useRef(true)
   const locked = busy || library.busy
-  useEffect(() => { if (!initialTab) { setTab(requested.tab); setListId(requested.listId) } }, [requested.revision, initialTab])
+  useEffect(() => { if (!initialTab) { setTab(normalizeLibraryTab(requested.tab)); setListId(requested.listId) } }, [requested.revision, initialTab])
   useEffect(() => { mounted.current = true; void initializeLibrary().then(() => restoreStatus()).then(setRestore).catch(error => { setMessage(String(error.message)) })
     return () => { mounted.current = false; pendingDirectory.current?.cancel() }
   }, [])
@@ -88,8 +90,7 @@ export default function Library({ initialTab }: { initialTab?: 'webdav' | 'downl
     <Button key={list.id} title={`${listId === list.id ? '已选：' : ''}${list.name}`} disabled={locked} onPress={() => { setListId(list.id) }} />)}</View>
   const accountButtons = <View style={row}>{library.configuration.accounts.map(a => <Button key={a.id} title={`${accountId === a.id ? '已选：' : ''}${a.name}`} disabled={locked} onPress={() => { setAccountId(a.id); setPath(''); setBackupEntries([]) }} />)}</View>
   if (Platform.OS !== 'ios') return <View style={{ flex: 1, padding: 20 }}><Text>资料库功能需要iOS / iPadOS构建。</Text></View>
-  const tabs = <View style={row}><Button title="下载" id="library-tab-downloads" onPress={() => { setTab('downloads') }} /><Button title="WebDAV" id="library-tab-webdav" onPress={() => { setTab('webdav') }} /><Button title="备份 / 恢复" id="library-tab-backup" onPress={() => { setTab('backup') }} /></View>
-  if (tab === 'downloads') return <View testID="library-screen" style={{ flex: 1, minHeight: 0, backgroundColor: theme['c-main-background'] }}>{tabs}<Downloads /></View>
+  const tabs = <View style={row}><Button title="WebDAV" id="library-tab-webdav" onPress={() => { setTab('webdav') }} /><Button title="备份 / 恢复" id="library-tab-backup" onPress={() => { setTab('backup') }} /></View>
   return <View testID="library-screen" style={{ flex: 1, backgroundColor: theme['c-main-background'] }}>
     <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 16, paddingBottom: 40, maxWidth: 1100, width: '100%', alignSelf: 'center' }}>
       <Text size={22} style={{ marginBottom: 8 }}>{tab === 'webdav' ? 'WebDAV 音乐' : '备份 / 恢复'}</Text>

@@ -1,14 +1,53 @@
 /**
- * 下载管理器 - 改进版
- * 复用播放器的链接获取逻辑，顺序下载避免限流
+ * 下载管理器（歌单离线下载）
+ *
+ * 设计要点（与播放缓存解耦）：
+ * - 文件落在本机 Documents/lx-music-downloads，不进入音频缓存（避免 LRU 淘汰与播放 lease 争锁）
+ * - 完成后写入 downloadLocal 索引，播放链路优先命中索引
+ * - 歌词/封面与音频同 base 保存，导出时可一并打包
+ * - 所有外部等待（取链、下载、歌词、封面）都有超时兜底，避免"UI 正常但播放/队列卡住"
  */
 import RNFS from 'react-native-fs'
 import AsyncStorage from '@react-native-async-storage/async-storage'
 import { getMusicUrlInfo, getLyricInfo, getPicUrl } from '@/core/music/online'
 import { requestMsg } from '@/utils/message'
-import { registerLocalAudioCache } from '@/plugins/player/cache'
+import {
+  getLocalDownloadedIdSet,
+  loadLocalDownloadIndex,
+  registerLocalDownload,
+  unregisterLocalDownload,
+} from './downloadLocal'
 
-const STORAGE_KEY = 'lx_music_download_tasks'
+const STORAGE_KEY = 'lx_music_download_tasks_v2'
+const DOWNLOAD_DIR = RNFS.DocumentDirectoryPath + '/lx-music-downloads'
+
+const MAX_CONCURRENT = 1
+const MAX_RETRY = 3
+const URL_TIMEOUT = 30000
+const DOWNLOAD_SETTLE_TIMEOUT = 10 * 60 * 1000
+const PIC_TIMEOUT = 20000
+const LYRIC_TIMEOUT = 10000
+const SAVE_DEBOUNCE = 1000
+const RETRY_BASE_DELAY = 2000
+const RETRY_MAX_DELAY = 30000
+const NAME_MAX_LEN = 90
+const DEFAULT_QUALITY: LX.Quality = '320k'
+
+const UA = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1'
+const REFERER_MAP: Record<string, string> = {
+  kw: 'https://www.kuwo.cn/',
+  kg: 'https://www.kugou.com/',
+  tx: 'https://y.qq.com/',
+  wy: 'https://music.163.com/',
+  mg: 'https://music.migu.cn/',
+}
+const EXT_BY_URL: Array<[RegExp, string]> = [
+  [/\.flac(\?|$)/i, 'flac'],
+  [/\.ape(\?|$)/i, 'ape'],
+  [/\.m4a(\?|$)/i, 'm4a'],
+  [/\.wav(\?|$)/i, 'wav'],
+  [/\.aac(\?|$)/i, 'aac'],
+]
 
 export type DownloadStatus = 'waiting' | 'preparing' | 'downloading' | 'paused' | 'completed' | 'failed' | 'cancelled'
 
@@ -26,77 +65,97 @@ export interface DownloadTask {
   createdAt: number
   completedAt?: number
   retryCount: number
+  /** 指数退避：早于该时间点不会被队列取走 */
+  nextRetryAt?: number
 }
 
 type TaskListener = (tasks: DownloadTask[]) => void
 
-const DOWNLOAD_DIR = RNFS.DocumentDirectoryPath + '/lx-music-downloads'
-const MAX_CONCURRENT = 1
-const MAX_RETRY = 3
-const URL_TIMEOUT = 30000
-
 let tasks: DownloadTask[] = []
 const listeners = new Set<TaskListener>()
-const activeDownloads = new Map<string, { job: any, cancelled: boolean }>()
+const activeDownloads = new Map<string, { jobId: number }>()
+/** 取消标记：仅用于"正在进行的任务被暂停/删除"，用完即删 */
 const cancelledTasks = new Set<string>()
-// iOS: RNFS job.stop() may leave job.promise pending forever (no resolve/reject
-// when the server supports range requests). Keep an abort handle per task so
-// pause/remove can release the pending await immediately, plus a hard settle
-// timeout as a last resort. Without this, the queue deadlocks on iOS.
+/** abort handle：iOS 上 job.stop() 可能让 promise 永不结算，用它主动解挂 */
 const abortControllers = new Map<string, { reject: (e: Error) => void }>()
-const DOWNLOAD_SETTLE_TIMEOUT = 10 * 60 * 1000
 let isProcessing = false
+let retryTimer: ReturnType<typeof setTimeout> | null = null
 
 const ensureDir = async() => {
   try {
-    const exists = await RNFS.exists(DOWNLOAD_DIR)
-    if (!exists) await RNFS.mkdir(DOWNLOAD_DIR)
+    if (!await RNFS.exists(DOWNLOAD_DIR)) await RNFS.mkdir(DOWNLOAD_DIR)
   } catch (e) {
-    console.error('创建下载目录失败', e)
+    console.warn('[download] mkdir failed', String(e))
   }
 }
 
+/** 给任意 promise 加超时兜底（超时返回 fallback，不抛错，避免卡死调用方） */
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise.catch(() => fallback),
+    new Promise<T>(resolve => { setTimeout(() => { resolve(fallback) }, timeoutMs) }),
+  ])
+}
+
 const notify = () => {
-  listeners.forEach(l => { l([...tasks]) })
+  const snapshot = [...tasks]
+  listeners.forEach(l => { l(snapshot) })
   saveTasks()
 }
 
+/** 只持久化必要字段，避免每次进度回调都序列化完整对象 */
 let saveTimer: ReturnType<typeof setTimeout> | null = null
 const saveTasks = () => {
   if (saveTimer) clearTimeout(saveTimer)
   saveTimer = setTimeout(() => {
-    try {
-      // 只保存必要信息，不保存临时状态
-      const tasksToSave = tasks.map(t => ({
-        ...t,
-        status: (t.status === 'downloading' || t.status === 'preparing') ? 'waiting' : t.status,
-      }))
-      void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(tasksToSave))
-    } catch (e) {
-      console.log('save download tasks failed:', e)
-    }
-  }, 500)
+    const persist = tasks.map(t => ({
+      id: t.id,
+      musicInfo: t.musicInfo,
+      status: (t.status === 'downloading' || t.status === 'preparing') ? 'waiting' as DownloadStatus : t.status,
+      quality: t.quality,
+      localPath: t.localPath,
+      createdAt: t.createdAt,
+      completedAt: t.completedAt,
+      retryCount: t.retryCount,
+      progress: t.status === 'completed' ? 1 : 0,
+      downloadedBytes: 0,
+      totalBytes: 0,
+      speed: 0,
+      errorMessage: t.errorMessage,
+    }))
+    void AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(persist)).catch((e: unknown) => {
+      console.warn('[download] persist failed', String(e))
+    })
+  }, SAVE_DEBOUNCE)
 }
 
 export const loadTasks = async() => {
+  void loadLocalDownloadIndex()
   try {
     const data = await AsyncStorage.getItem(STORAGE_KEY)
-    if (data) {
-      const loaded = JSON.parse(data)
-      tasks = loaded.map((t: DownloadTask) => ({
+    if (!data) return
+    const loaded = JSON.parse(data) as unknown
+    if (!Array.isArray(loaded)) return
+    tasks = (loaded as DownloadTask[])
+      .filter(t => t && typeof t.id === 'string' && t.musicInfo)
+      .map(t => ({
         ...t,
         status: (t.status === 'downloading' || t.status === 'preparing') ? 'waiting' : t.status,
+        progress: t.status === 'completed' ? 1 : 0,
+        downloadedBytes: 0,
+        totalBytes: 0,
+        speed: 0,
+        nextRetryAt: undefined,
       }))
-      // 已下载文件的播放命中由 skyhc 自带音频缓存（磁盘持久化）负责，无需重建注册表
-      notify()
-      // 恢复等待中的任务
-      const waitingTasks = tasks.filter(t => t.status === 'waiting')
-      if (waitingTasks.length) {
-        setTimeout(async() => processQueue(), 1000)
-      }
+    notify()
+    // 兼容旧版本：已完成任务的 localPath 可能是历史缓存路径，这里重建本地索引，
+    // 让播放与徽标立即可用（文件若已被清理由查索引时的存在性校验自动剔除）
+    for (const t of tasks) {
+      if (t.status === 'completed' && t.localPath) registerLocalDownload(t.musicInfo, t.localPath, t.quality)
     }
+    if (tasks.some(t => t.status === 'waiting')) setTimeout(() => { void processQueue() }, 1000)
   } catch (e) {
-    console.log('load download tasks failed:', e)
+    console.warn('[download] load failed', String(e))
   }
 }
 
@@ -111,11 +170,28 @@ const generateId = (musicInfo: LX.Music.MusicInfoOnline) => {
   return `${musicInfo.source}_${musicInfo.id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 }
 
-const sanitizeFilename = (name: string) => {
-  return name.replace(/[\\/:*?"<>|]/g, '_').slice(0, 100)
+/** 文件名安全化，且保证扩展名不被截断 */
+const buildFilename = (musicInfo: LX.Music.MusicInfoOnline, ext: string) => {
+  const artist = musicInfo.singer || '未知艺术家'
+  const title = musicInfo.name || '未知歌曲'
+  const idHash = String(musicInfo.id ?? '').replace(/[^a-zA-Z0-9]/g, '').slice(-6)
+  const suffix = ` [${musicInfo.source}${idHash ? '-' + idHash : ''}].${ext}`
+  const base = `${artist} - ${title}`
+    .replace(/[\\/:*?"<>|\r\n]/g, '_')
+    .slice(0, Math.max(1, NAME_MAX_LEN - suffix.length))
+  return base + suffix
 }
 
-// 完全复刻播放器的 getMusicPlayUrl 逻辑，直接用 isRefresh=true 确保获取最新链接
+/** 同 source+id 且处于"有效"状态的任务（用于去重，避免并发写同一文件） */
+const findDuplicate = (musicInfo: LX.Music.MusicInfoOnline) => {
+  return tasks.find(t => t.musicInfo.source === musicInfo.source &&
+    t.musicInfo.id === musicInfo.id &&
+    t.status !== 'failed' && t.status !== 'cancelled')
+}
+
+class InvalidUrlError extends Error {}
+
+/** 复刻播放器取链逻辑，取下载直链（带单次 429 退避与一次普通重试） */
 const getMusicDownloadUrl = async(
   musicInfo: LX.Music.MusicInfoOnline,
   isRefresh = true,
@@ -124,86 +200,73 @@ const getMusicDownloadUrl = async(
 ): Promise<{ url: string, quality: LX.Quality | null }> => {
   const toggleMusicInfo = musicInfo.meta.toggleMusicInfo
 
-  // 第一步：先尝试 toggleMusicInfo（不切换音源）
+  const request = async(info: LX.Music.MusicInfoOnline, allowToggleSource: boolean) => getMusicUrlInfo({
+    musicInfo: info,
+    quality,
+    isRefresh,
+    allowToggleSource,
+  })
+
   const firstTry = toggleMusicInfo
-    ? getMusicUrlInfo({
-      musicInfo: toggleMusicInfo,
-      quality,
-      isRefresh,
-      allowToggleSource: false,
-    }).catch(async() => {
-      // 失败后用原信息，允许切换音源
-      return getMusicUrlInfo({
-        musicInfo,
-        quality,
-        isRefresh,
-        allowToggleSource: true,
-        onToggleSource() {
-          console.log('download: toggle source try')
-        },
-      })
-    })
-    : getMusicUrlInfo({
-      musicInfo,
-      quality,
-      isRefresh,
-      allowToggleSource: true,
-      onToggleSource() {
-        console.log('download: toggle source try')
-      },
-    })
+    ? request(toggleMusicInfo, false).catch(async() => request(musicInfo, true))
+    : request(musicInfo, true)
 
   return firstTry.catch(async(err: any) => {
-    // tooManyRequests 延迟2-6秒重试（仅一次，防止无限递归）
-    if (!isRetryed && err.message == requestMsg.tooManyRequests) {
-      const time = 2 + Math.random() * 4
-      await new Promise(resolve => setTimeout(resolve, time * 1000))
+    const message = err instanceof Error ? err.message : String(err)
+    if (!isRetryed && message == requestMsg.tooManyRequests) {
+      await new Promise(resolve => { setTimeout(resolve, (2 + Math.random() * 4) * 1000) })
       return getMusicDownloadUrl(musicInfo, isRefresh, true, quality)
     }
-
-    // 第一次失败，再试一次
-    if (!isRetryed) {
-      return getMusicDownloadUrl(musicInfo, isRefresh, true, quality)
-    }
-
-    // 第二次失败，如果不是刷新模式，用 isRefresh=true 再试一次
-    if (!isRefresh) {
-      return getMusicDownloadUrl(musicInfo, true, true, quality)
-    }
-
+    if (!isRetryed) return getMusicDownloadUrl(musicInfo, isRefresh, true, quality)
     throw err
   })
 }
 
-const getUrlWithTimeout = async(musicInfo: LX.Music.MusicInfoOnline, quality?: LX.Quality): Promise<{ url: string, quality: LX.Quality | null }> => {
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
+/** 取链 + 超时；超时后置 token.aborted，阻止内部递归重试继续跑 */
+const getUrlWithTimeout = async(
+  musicInfo: LX.Music.MusicInfoOnline,
+  quality: LX.Quality | undefined,
+  token: { aborted: boolean },
+): Promise<{ url: string, quality: LX.Quality | null }> => {
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      token.aborted = true
       reject(new Error('获取链接超时'))
     }, URL_TIMEOUT)
-
-    getMusicDownloadUrl(musicInfo, true, false, quality).then(result => {
-      clearTimeout(timeout)
-      resolve(result)
-    }).catch(err => {
-      clearTimeout(timeout)
-      reject(err)
-    })
   })
+  try {
+    return await Promise.race([getMusicDownloadUrl(musicInfo, true, false, quality), timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+const scheduleProcessQueue = (delay: number) => {
+  if (retryTimer) clearTimeout(retryTimer)
+  retryTimer = setTimeout(() => { retryTimer = null; void processQueue() }, delay)
 }
 
 const processQueue = async() => {
   if (isProcessing) return
   isProcessing = true
-
   try {
     while (true) {
       const activeCount = tasks.filter(t => t.status === 'downloading' || t.status === 'preparing').length
       if (activeCount >= MAX_CONCURRENT) break
 
-      const waitingTask = tasks.find(t => t.status === 'waiting')
-      if (!waitingTask) break
+      const now = Date.now()
+      const waiting = tasks.filter(t => t.status === 'waiting')
+      if (!waiting.length) break
 
-      await startDownload(waitingTask)
+      const ready = waiting.find(t => !t.nextRetryAt || t.nextRetryAt <= now)
+      if (!ready) {
+        // 全部处于退避等待：等最早的一个到期再继续，避免空转
+        const next = Math.min(...waiting.map(t => t.nextRetryAt ?? now))
+        scheduleProcessQueue(Math.max(200, next - now))
+        break
+      }
+      await startDownload(ready)
     }
   } finally {
     isProcessing = false
@@ -211,56 +274,33 @@ const processQueue = async() => {
 }
 
 const startDownload = async(task: DownloadTask) => {
-  if (cancelledTasks.has(task.id)) {
-    cancelledTasks.delete(task.id)
-    return
-  }
+  const fresh = getTask(task.id)
+  if (!fresh || fresh.status !== 'waiting') return
 
-  updateTask(task.id, { status: 'preparing' })
+  const token = { aborted: false }
+  updateTask(task.id, { status: 'preparing', errorMessage: undefined, nextRetryAt: undefined })
 
   try {
-    const result = await getUrlWithTimeout(task.musicInfo, task.quality)
+    const result = await getUrlWithTimeout(task.musicInfo, task.quality, token)
 
-    if (cancelledTasks.has(task.id)) {
+    if (token.aborted || cancelledTasks.has(task.id)) {
       cancelledTasks.delete(task.id)
       return
     }
+    if (!result?.url) throw new InvalidUrlError('无法获取下载链接')
+    // 安全：下载地址必须为 http(s)，避免自定义源返回异常 scheme
+    if (!/^https?:\/\//i.test(result.url)) throw new InvalidUrlError('无效的下载地址')
 
-    if (!result?.url) {
-      throw new Error('无法获取下载链接')
-    }
-
-    if (result.url.includes('fake')) {
-      throw new Error('无效的下载链接')
-    }
-
-    await ensureDir()
-
-    const artist = task.musicInfo.singer || '未知艺术家'
-    const title = task.musicInfo.name || '未知歌曲'
-    const ext = result.url.includes('.flac') ? 'flac' : result.url.includes('.ape') ? 'ape' : result.url.includes('.m4a') ? 'm4a' : 'mp3'
-    // 文件名加入源+歌曲id摘要，避免同名任务（不同音质/重复下载）互相覆盖
-    const idHash = String(task.musicInfo.id ?? '').replace(/[^a-zA-Z0-9]/g, '').slice(-6)
-    const filename = sanitizeFilename(`${artist} - ${title} [${task.musicInfo.source}${idHash ? '-' + idHash : ''}].${ext}`)
+    const quality = result.quality ?? task.quality ?? DEFAULT_QUALITY
+    const ext = EXT_BY_URL.find(([rx]) => rx.test(result.url))?.[1] ?? 'mp3'
+    const filename = buildFilename(task.musicInfo, ext)
     const localPath = `${DOWNLOAD_DIR}/${filename}`
 
-    updateTask(task.id, { status: 'downloading' })
+    await ensureDir()
+    updateTask(task.id, { status: 'downloading', quality, progress: 0 })
 
-    const headers: Record<string, string> = {
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1',
-    }
-
-    const source = task.musicInfo.source
-    const refererMap: Record<string, string> = {
-      kw: 'https://www.kuwo.cn/',
-      kg: 'https://www.kugou.com/',
-      tx: 'https://y.qq.com/',
-      wy: 'https://music.163.com/',
-      mg: 'https://music.migu.cn/',
-    }
-    if (refererMap[source]) {
-      headers.Referer = refererMap[source]
-    }
+    const headers: Record<string, string> = { 'User-Agent': UA }
+    if (REFERER_MAP[task.musicInfo.source]) headers.Referer = REFERER_MAP[task.musicInfo.source]
 
     const job = RNFS.downloadFile({
       fromUrl: result.url,
@@ -278,138 +318,123 @@ const startDownload = async(task: DownloadTask) => {
         })
       },
     })
+    activeDownloads.set(task.id, { jobId: job.jobId })
 
-    activeDownloads.set(task.id, { job, cancelled: false })
-
-    let result2 = null as null | { statusCode: number }
+    let downloaded: { statusCode: number } | null = null
+    let abortReject: (e: Error) => void = () => {}
+    const abortPromise = new Promise<never>((_resolve, reject) => { abortReject = reject })
+    abortControllers.set(task.id, { reject: abortReject })
+    let settleTimer: ReturnType<typeof setTimeout> | null = null
+    const settleFallback = new Promise<never>((_resolve, reject) => {
+      settleTimer = setTimeout(() => { reject(new Error('下载进程无响应，已超时放弃')) }, DOWNLOAD_SETTLE_TIMEOUT)
+    })
     try {
-      // iOS: job.stop() may leave job.promise pending forever; race it against
-      // an abort handle (released by pause/remove) and a hard settle timeout.
-      let abortReject: (e: Error) => void = () => {}
-      const abortPromise = new Promise<never>((_resolve, reject) => { abortReject = reject })
-      abortControllers.set(task.id, { reject: abortReject })
-      let settleTimer: ReturnType<typeof setTimeout> | null = null
-      const settleFallback = new Promise<never>((_resolve, reject) => {
-        settleTimer = setTimeout(() => { reject(new Error('下载进程无响应，已超时放弃')) }, DOWNLOAD_SETTLE_TIMEOUT)
-      })
-      try {
-        result2 = await Promise.race([job.promise, abortPromise, settleFallback])
-      } finally {
-        if (settleTimer) clearTimeout(settleTimer)
-      }
+      downloaded = await Promise.race([job.promise, abortPromise, settleFallback])
     } catch (e) {
-      // stopped by pause/remove, or settle timeout: release the queue cleanly
       if (cancelledTasks.has(task.id)) {
         cancelledTasks.delete(task.id)
         return
       }
       throw e
+    } finally {
+      if (settleTimer) clearTimeout(settleTimer)
+      abortControllers.delete(task.id)
     }
 
     if (cancelledTasks.has(task.id)) {
       cancelledTasks.delete(task.id)
-      activeDownloads.delete(task.id)
       return
     }
 
-    if (result2 && (result2.statusCode === 200 || result2.statusCode === 206)) {
-      // 下载完成后保存歌词和封面
-      const basePath = localPath.replace(/\.[^.]+$/, '')
-
-      // 保存歌词
-      try {
-        const lyricInfo = await getLyricInfo({ musicInfo: task.musicInfo, isRefresh: true })
-        if (lyricInfo?.lyric) {
-          await RNFS.writeFile(basePath + '.lrc', lyricInfo.lyric, 'utf8')
-        }
-      } catch (e) {
-        console.log('download lyric failed:', e)
-      }
-
-      // 保存封面
-      try {
-        const picUrl = await getPicUrl({ musicInfo: task.musicInfo, isRefresh: true })
-        if (picUrl && picUrl.startsWith('http')) {
-          const picExt = picUrl.includes('.png') ? '.png' : '.jpg'
-          const picJob = RNFS.downloadFile({
-            fromUrl: picUrl,
-            toFile: basePath + picExt,
-            headers: {
-              'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15',
-            },
-          })
-          await picJob.promise
-        }
-      } catch (e) {
-        console.log('download pic failed:', e)
-      }
-
-      updateTask(task.id, {
-        status: 'completed',
-        progress: 1,
-        localPath,
-        completedAt: Date.now(),
-        speed: 0,
-      })
-      // 下载完成：接入 skyhc 音频缓存（播放本地走 cache 机制，断网可播）
-      // 注册成功则文件移入缓存目录，任务 localPath 更新为缓存内路径；
-      // 注册失败（格式不支持等）时文件留在下载目录，仍可导出/查看。
-      try {
-        const cachedPath = await registerLocalAudioCache(
-          task.musicInfo,
-          result.quality ?? task.quality ?? '320k',
-          `file://${localPath}`,
-        )
-        if (cachedPath) {
-          updateTask(task.id, { localPath: cachedPath.replace(/^file:\/\//, '') })
-          console.log('download completed, cache registered:', cachedPath)
-        } else {
-          console.log('download completed, cache register skipped:', localPath)
-        }
-      } catch (e) {
-        console.log('download cache register failed:', e)
-      }
-    } else if (result2 && result2.statusCode === 403) {
-      throw new Error('下载被禁止(403)，可能需要登录或有防盗链')
-    } else if (result2 && result2.statusCode === 404) {
-      throw new Error('文件不存在(404)')
-    } else {
-      throw new Error(`下载失败，状态码: ${result2?.statusCode ?? '未知'}`)
+    const statusCode = downloaded?.statusCode ?? 0
+    if (statusCode !== 200 && statusCode !== 206) {
+      if (statusCode === 403) throw new Error('下载被禁止(403)，可能需要登录或有防盗链')
+      if (statusCode === 404) throw new Error('文件不存在(404)')
+      throw new Error(`下载失败，状态码: ${statusCode || '未知'}`)
     }
+
+    const basePath = localPath.replace(/\.[^.]+$/, '')
+
+    // 歌词/封面：带超时，失败不影响下载结果
+    const lyric = await withTimeout(
+      getLyricInfo({ musicInfo: task.musicInfo, isRefresh: true }).then(info => info?.lyric ?? null),
+      LYRIC_TIMEOUT,
+      null,
+    )
+    if (lyric) {
+      await RNFS.writeFile(basePath + '.lrc', lyric, 'utf8').catch(() => {})
+    }
+
+    const picUrl = await withTimeout(
+      getPicUrl({ musicInfo: task.musicInfo, isRefresh: true }).catch(() => ''),
+      LYRIC_TIMEOUT,
+      '',
+    )
+    if (picUrl && /^https?:\/\//i.test(picUrl)) {
+      const picExt = /\.png(\?|$)/i.test(picUrl) ? '.png' : '.jpg'
+      const picJob = RNFS.downloadFile({
+        fromUrl: picUrl,
+        toFile: basePath + picExt,
+        headers: { 'User-Agent': UA },
+      })
+      await withTimeout(picJob.promise, PIC_TIMEOUT, null)
+    }
+
+    registerLocalDownload(task.musicInfo, localPath, quality)
+
+    updateTask(task.id, {
+      status: 'completed',
+      progress: 1,
+      localPath,
+      completedAt: Date.now(),
+      speed: 0,
+      errorMessage: undefined,
+      nextRetryAt: undefined,
+    })
   } catch (error) {
     if (cancelledTasks.has(task.id)) {
       cancelledTasks.delete(task.id)
       return
     }
 
-    const msg = error instanceof Error ? error.message : String(error)
+    const rawMsg = error instanceof Error ? error.message : String(error)
     const currentTask = getTask(task.id)
+    const retryable = currentTask && currentTask.retryCount < MAX_RETRY &&
+      !(error instanceof InvalidUrlError) &&
+      !rawMsg.includes('超时') &&
+      !rawMsg.includes('无响应')
 
-    if (currentTask && currentTask.retryCount < MAX_RETRY && !msg.includes('超时')) {
+    if (currentTask && retryable) {
+      const nextRetry = currentTask.retryCount + 1
+      const delay = Math.min(RETRY_MAX_DELAY, RETRY_BASE_DELAY * Math.pow(2, currentTask.retryCount))
       updateTask(task.id, {
         status: 'waiting',
-        retryCount: currentTask.retryCount + 1,
-        errorMessage: `${msg} (重试中 ${currentTask.retryCount + 1}/${MAX_RETRY})`,
+        retryCount: nextRetry,
+        nextRetryAt: Date.now() + delay,
+        errorMessage: `${rawMsg}（${Math.round(delay / 1000)} 秒后第 ${nextRetry}/${MAX_RETRY} 次重试）`,
+        speed: 0,
       })
-      // move retrying task to the tail so it does not starve the rest of the queue
+      // 移到队尾，避免反复失败的任务阻塞其它任务
       const moved = tasks.filter(t => t.id !== task.id)
       const self = tasks.find(t => t.id === task.id)
       if (self) tasks = [...moved, self]
     } else {
       updateTask(task.id, {
         status: 'failed',
-        errorMessage: msg,
+        errorMessage: rawMsg,
         speed: 0,
       })
     }
   } finally {
     activeDownloads.delete(task.id)
     abortControllers.delete(task.id)
-    setTimeout(async() => processQueue(), 500)
+    scheduleProcessQueue(300)
   }
 }
 
-export const addDownload = (musicInfo: LX.Music.MusicInfoOnline, quality?: LX.Quality) => {
+/** 新建任务；返回 null 表示已存在同歌任务（调用方据此提示） */
+export const addDownload = (musicInfo: LX.Music.MusicInfoOnline, quality?: LX.Quality): string | null => {
+  if (findDuplicate(musicInfo)) return null
   const task: DownloadTask = {
     id: generateId(musicInfo),
     musicInfo,
@@ -428,96 +453,103 @@ export const addDownload = (musicInfo: LX.Music.MusicInfoOnline, quality?: LX.Qu
   return task.id
 }
 
-export const addDownloads = (musicInfos: LX.Music.MusicInfoOnline[], quality?: LX.Quality) => {
-  const newTasks: DownloadTask[] = musicInfos.map(info => ({
-    id: generateId(info),
-    musicInfo: info,
-    status: 'waiting',
-    progress: 0,
-    downloadedBytes: 0,
-    totalBytes: 0,
-    speed: 0,
-    quality,
-    createdAt: Date.now(),
-    retryCount: 0,
-  }))
-  tasks = [...tasks, ...newTasks]
+/** 批量新建；全部重复时返回 null */
+export const addDownloads = (musicInfos: LX.Music.MusicInfoOnline[], quality?: LX.Quality): string[] | null => {
+  const added: DownloadTask[] = []
+  for (const info of musicInfos) {
+    const duplicated = findDuplicate(info) != null ||
+      added.some(t => t.musicInfo.source === info.source && t.musicInfo.id === info.id)
+    if (duplicated) continue
+    added.push({
+      id: generateId(info),
+      musicInfo: info,
+      status: 'waiting',
+      progress: 0,
+      downloadedBytes: 0,
+      totalBytes: 0,
+      speed: 0,
+      quality,
+      createdAt: Date.now(),
+      retryCount: 0,
+    })
+  }
+  if (!added.length) return null
+  tasks = [...tasks, ...added]
   notify()
   void processQueue()
-  return newTasks.map(t => t.id)
+  return added.map(t => t.id)
+}
+
+const stopActiveJob = (taskId: string, reason: string) => {
+  const active = activeDownloads.get(taskId)
+  if (active) {
+    try {
+      RNFS.stopDownload(active.jobId)
+    } catch {
+      // 底层任务可能已结束，忽略
+    }
+    activeDownloads.delete(taskId)
+  }
+  abortControllers.get(taskId)?.reject(new Error(reason))
 }
 
 export const pauseTask = (taskId: string) => {
   const task = getTask(taskId)
-  if (!task) return
+  if (!task || task.status === 'completed' || task.status === 'failed') return
   if (task.status === 'downloading' || task.status === 'preparing') {
-    const active = activeDownloads.get(taskId)
-    if (active) {
-      active.job.stop()
-      activeDownloads.delete(taskId)
-    }
-    // release the pending await so the queue does not deadlock on iOS
-    abortControllers.get(taskId)?.reject(new Error('task stopped'))
+    cancelledTasks.add(taskId)
+    stopActiveJob(taskId, 'task stopped')
   }
-  cancelledTasks.add(taskId)
-  updateTask(taskId, { status: 'paused', speed: 0 })
+  updateTask(taskId, { status: 'paused', speed: 0, nextRetryAt: undefined })
 }
 
 export const resumeTask = (taskId: string) => {
   const task = getTask(taskId)
   if (!task || task.status !== 'paused') return
   cancelledTasks.delete(taskId)
-  updateTask(taskId, { status: 'waiting', retryCount: 0 })
+  updateTask(taskId, { status: 'waiting', retryCount: 0, nextRetryAt: undefined, errorMessage: undefined })
   void processQueue()
 }
 
 export const removeTask = (taskId: string, deleteFile = false) => {
   const task = getTask(taskId)
-  if (task) {
-    if (task.status === 'downloading' || task.status === 'preparing') {
-      const active = activeDownloads.get(taskId)
-      if (active) active.job.stop()
-      activeDownloads.delete(taskId)
-      // release the pending await so the queue does not deadlock on iOS
-      abortControllers.get(taskId)?.reject(new Error('task removed'))
-      cancelledTasks.add(taskId)
-    }
-    if (deleteFile && task.localPath) {
-      RNFS.unlink(task.localPath).catch(() => {
-        // also remove related files (lyric/cover)
-        const base = task.localPath!.replace(/\.[^.]+$/, '')
-        RNFS.unlink(base + '.lrc').catch(() => {})
-        RNFS.unlink(base + '.jpg').catch(() => {})
-        RNFS.unlink(base + '.png').catch(() => {})
-      })
-      // cache 内文件删除后由 cache 完整性检查自动 discard（无需额外注册表操作）
-    }
+  if (!task) return
+  if (task.status === 'downloading' || task.status === 'preparing') {
+    stopActiveJob(taskId, 'task removed')
   }
+  cancelledTasks.delete(taskId)
+
+  if (deleteFile && task.localPath) {
+    const localPath = task.localPath
+    const base = localPath.replace(/\.[^.]+$/, '')
+    void RNFS.unlink(localPath).catch(() => {})
+    void RNFS.unlink(base + '.lrc').catch(() => {})
+    void RNFS.unlink(base + '.jpg').catch(() => {})
+    void RNFS.unlink(base + '.png').catch(() => {})
+    unregisterLocalDownload(localPath)
+  }
+
   tasks = tasks.filter(t => t.id !== taskId)
   notify()
-  setTimeout(async() => processQueue(), 100)
+  scheduleProcessQueue(100)
 }
 
 export const retryTask = (taskId: string) => {
   const task = getTask(taskId)
   if (!task || task.status !== 'failed') return
-  updateTask(taskId, { status: 'waiting', errorMessage: undefined, retryCount: 0 })
+  updateTask(taskId, { status: 'waiting', errorMessage: undefined, retryCount: 0, nextRetryAt: undefined })
   void processQueue()
 }
 
 export const pauseAll = () => {
-  tasks.forEach(t => {
-    if (t.status === 'downloading' || t.status === 'preparing' || t.status === 'waiting') {
-      pauseTask(t.id)
-    }
-  })
+  tasks.forEach(t => { pauseTask(t.id) })
 }
 
 export const resumeAll = () => {
   tasks.forEach(t => {
     if (t.status === 'paused') {
       cancelledTasks.delete(t.id)
-      updateTask(t.id, { status: 'waiting', retryCount: 0 })
+      updateTask(t.id, { status: 'waiting', retryCount: 0, nextRetryAt: undefined })
     }
   })
   void processQueue()
@@ -532,10 +564,13 @@ export const getTasks = () => [...tasks]
 
 export const subscribe = (listener: TaskListener) => {
   listeners.add(listener)
-  return () => listeners.delete(listener)
+  return () => { listeners.delete(listener) }
 }
 
 export const getDownloadDir = () => DOWNLOAD_DIR
+
+/** 已下载标识（来自本地索引，清空下载记录后徽标仍准确） */
+export const getDownloadedIdSet = (): Set<string> => getLocalDownloadedIdSet()
 
 export default {
   addDownload,
@@ -550,15 +585,5 @@ export default {
   getTasks,
   subscribe,
   getDownloadDir,
-}
-
-/** 已下载（completed）歌曲标识映射（id 与 source|name|singer 双索引），供列表显示"已下载"标识 */
-export const getDownloadedIdSet = (): Set<string> => {
-  const set = new Set<string>()
-  for (const t of tasks) {
-    if (t.status !== 'completed') continue
-    set.add(t.musicInfo.id)
-    set.add(`${t.musicInfo.source}|${t.musicInfo.name}|${t.musicInfo.singer}`)
-  }
-  return set
+  getDownloadedIdSet,
 }

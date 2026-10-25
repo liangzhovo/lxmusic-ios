@@ -74,7 +74,6 @@ export default forwardRef<ListMenuType, ListMenuProps>((props, ref) => {
     const menu = [
       { action: 'play', label: t('play') },
       { action: 'playLater', label: t('play_later') },
-      ...(global.lx.libraryDownloadsEnabled ? [{ action: 'download', label: '下载到资料库' }] : []),
       { action: 'downloadManage', disabled: isLocal, label: t('download') },
       { action: 'add', label: t('add_to') },
       { action: 'move', label: t('move_to') },
@@ -111,9 +110,6 @@ export default forwardRef<ListMenuType, ListMenuProps>((props, ref) => {
   const handleMenuPress = ({ action }: typeof menus[number]) => {
     const selectInfo = selectInfoRef.current
     switch (action) {
-      case 'download':
-        void import('@/core/library').then(({ downloadFromMenu }) => downloadFromMenu(selectInfo.single || !selectInfo.selectedList.length ? [selectInfo.musicInfo] : selectInfo.selectedList))
-        break
       case 'downloadManage':
         props.onDownload(selectInfo)
         break

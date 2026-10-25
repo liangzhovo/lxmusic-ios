@@ -84,11 +84,6 @@ export const lookupAudioCache = async(music: LX.Music.MusicInfoOnline, quality: 
   if (!cache) return null
   return optionalTask(ready().then(async() => cache.lookup(keyFor(music, quality))), 1200, null, 'lookup')
 }
-/** 注册本地已下载的音频文件进缓存（下载功能接入播放缓存）；成功返回缓存内 file:// 路径 */
-export const registerLocalAudioCache = async(music: LX.Music.MusicInfoOnline, quality: LX.Quality, localFileURL: string) => {
-  if (!cache) return null
-  return optionalTask(ready().then(async() => cache.registerLocalFile(keyFor(music, quality), localFileURL)), 5000, null, 'register')
-}
 export const queueAudioCache = (music: LX.Music.MusicInfoOnline, quality: LX.Quality, url: string) => {
   if (!cache) return
   // Register only. Build 78 started a second request before the audio engine

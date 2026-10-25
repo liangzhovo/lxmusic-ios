@@ -244,47 +244,6 @@ export class DiskAudioCache {
   }
   cancelPending() { this.cancel() }
 
-  /**
-   * 注册本地已存在的音频文件进缓存（供"下载功能"把下载完成的文件接入播放缓存）。
-   * 与 prefetch 复用同一 manifest 流程：移动文件进缓存目录 + 发布 manifest。
-   * 成功返回缓存内 file:// 路径；格式不受支持或失败返回 null（下载文件仍留在原目录）。
-   */
-  registerLocalFile(key: string, sourcePath: string): Promise<string | null> {
-    return this.locked(async() => {
-      await this.init()
-      if (!this.limit || this.entries.has(key) || !/^file:\/\//i.test(sourcePath)) return null
-      try {
-        const stat = await this.io.stat(sourcePath)
-        if (stat.size <= 0) return null
-        const extension = audioExtension(await this.io.head(sourcePath))
-        if (!extension) return null
-        const sha256 = await this.io.hash(sourcePath)
-        const name = `${this.io.digestKey(key)}-${this.io.id()}.${extension}`
-        const entry: Entry = { schema: 1, key, file: name, size: stat.size, sha256, accessed: Date.now() }
-        const path = `${this.folder}/${name}`
-        const temp = `${path}.json.tmp`
-        try {
-          await this.io.move(sourcePath, path)
-          // Publish the manifest last. Unindexed audio is not a cache hit.
-          await this.io.write(temp, JSON.stringify(entry))
-          await this.io.move(temp, `${path}.json`)
-        } catch (error) {
-          await this.remove(temp)
-          await this.remove(path)
-          throw error
-        }
-        const previous = this.entries.get(key)
-        if (previous) await this.discard(previous)
-        this.entries.set(key, entry)
-        await this.prune()
-        this.io.log('registered', String(entry.size))
-        return fileURL(path)
-      } catch (error) {
-        this.io.log('register-failed', String(error))
-        return null
-      }
-    })
-  }
   importCompleteFile(key: string, source: string, stillCurrent: () => boolean = () => true): Promise<void> {
     return this.locked(async() => {
       await this.init()

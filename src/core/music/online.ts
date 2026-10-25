@@ -16,6 +16,7 @@ import {
   handleGetOnlinePicUrl,
   getCachedLyricInfo,
 } from './utils'
+import { getDownloadedFilePath } from '@/utils/downloadLocal'
 
 /* export const setMusicUrl = ({ musicInfo, type, url }: {
   musicInfo: LX.Music.MusicInfo
@@ -61,6 +62,15 @@ export const getMusicUrlInfo = async({ musicInfo, quality, isRefresh, allowToggl
   // Complete audio is resolved before URL lookup or source requests, including
   // after a process restart with no network connection.
   if (!isRefresh) {
+    // 1) 用户主动下载的文件优先：独立索引（内存命中 + 存在性校验），
+    //    不参与音频缓存的 LRU 淘汰，也不等待缓存串行锁，断网也能播。
+    try {
+      const downloaded = await getDownloadedFilePath(musicInfo)
+      if (downloaded) return { url: downloaded, quality: quality ?? null }
+    } catch (error) {
+      console.warn('[download] local index lookup failed', String(error))
+    }
+    // 2) 在线播放时自动缓存的音频
     const local = await lookupAudioCache(musicInfo, targetQuality)
     if (local && stillCurrent()) return { url: local, quality: targetQuality }
   } else {

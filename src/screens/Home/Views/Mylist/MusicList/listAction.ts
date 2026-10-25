@@ -147,8 +147,12 @@ export const handleDownload = (musicInfo: SelectInfo['musicInfo']) => {
   const online = toOnlineMusicInfo(musicInfo)
   if (!online) return
   showDownloadQualityDialog(musicInfo.name, online, quality => {
+    const id = addDownload(online, quality)
+    if (!id) {
+      toast('该歌曲已在下载任务中或已下载')
+      return
+    }
     hapticLight()
-    addDownload(online, quality)
     toast(`${musicInfo.name} 已添加到下载任务`)
   })
 }
@@ -160,9 +164,13 @@ export const handleMultiDownload = (musicInfos: SelectInfo['selectedList'], onCa
   if (list.length === 0) return
   // 批量下载：按第一首歌的可用音质弹一次选择，应用于全部
   showDownloadQualityDialog(`${list.length} 首歌曲`, list[0], quality => {
+    const ids = addDownloads(list, quality)
+    if (!ids) {
+      toast('所选歌曲已在下载任务中或已下载')
+      return
+    }
     hapticLight()
-    addDownloads(list, quality)
-    toast(`已添加 ${list.length} 首歌曲到下载任务`)
+    toast(`已添加 ${ids.length} 首歌曲到下载任务`)
     onCancelSelect()
   })
 }

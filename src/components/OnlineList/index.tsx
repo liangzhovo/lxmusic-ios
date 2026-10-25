@@ -80,17 +80,26 @@ export default forwardRef<OnlineListType, OnlineListProps>(({
       listMusicAddRef.current?.show({ musicInfo: info.musicInfo, listId: '', isMove: false })
     }
   }
-  // 下载管理：弹音质选择后加入下载队列
+  // 下载管理：弹音质选择后加入下载队列（已存在同歌任务时提示，避免并发写同一文件）
   const handleDownload = (info: SelectInfo) => {
     const musics = info.single || !info.selectedList.length ? [info.musicInfo] : info.selectedList
     showDownloadQualityDialog(musics.length > 1 ? `${musics.length} 首歌曲` : info.musicInfo.name, musics[0], quality => {
-      hapticLight()
       if (musics.length > 1) {
-        DownloadManager.addDownloads(musics, quality)
-        Alert.alert('下载', `已添加 ${musics.length} 首歌曲到下载任务`)
+        const ids = DownloadManager.addDownloads(musics, quality)
+        if (!ids) {
+          Alert.alert('下载', '所选歌曲已在下载任务中或已下载')
+          return
+        }
+        hapticLight()
+        Alert.alert('下载', `已添加 ${ids.length} 首歌曲到下载任务`)
         hancelExitSelect()
       } else {
-        DownloadManager.addDownload(info.musicInfo, quality)
+        const id = DownloadManager.addDownload(info.musicInfo, quality)
+        if (!id) {
+          Alert.alert('下载', '该歌曲已在下载任务中或已下载')
+          return
+        }
+        hapticLight()
         Alert.alert('下载', `已添加「${info.musicInfo.name}」到下载任务`)
       }
     })
