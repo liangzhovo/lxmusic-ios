@@ -57,8 +57,12 @@ const isRemoteUrl = (url: string) => /^https?:\/\//i.test(url)
 
 export const isNativeFlacPlayerAvailable = () => Platform.OS == 'ios' && isStreamingFlacSupported
 
-export const shouldUseNativeFlacPlayer = async(musicInfo: LX.Player.PlayMusic, _url: string, quality?: LX.Quality | null) => {
+export const shouldUseNativeFlacPlayer = async(musicInfo: LX.Player.PlayMusic, url: string, quality?: LX.Quality | null) => {
   if (!isNativeFlacPlayerAvailable()) return false
+
+  // 本地文件（离线下载/媒体库本地音频）交给 TrackPlayer(AVPlayer) 播放。
+  // 原生通道是"流式"实现，用它打开 file:// 会一直停在缓冲中。
+  if (!isRemoteUrl(url)) return false
 
   if (quality != null) return preferredPreciseQualities.has(quality)
   return getMusicInfo(musicInfo).source != 'local' && preferredPreciseQualities.has(settingState.setting['player.playQuality'])

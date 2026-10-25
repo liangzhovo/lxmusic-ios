@@ -9,6 +9,7 @@
  */
 import RNFS from 'react-native-fs'
 import AsyncStorage from '@react-native-async-storage/async-storage'
+import { Buffer } from '@craftzdog/react-native-buffer'
 import { getMusicUrlInfo, getLyricInfo, getPicUrl } from '@/core/music/online'
 import { requestMsg } from '@/utils/message'
 import {
@@ -189,6 +190,30 @@ const findDuplicate = (musicInfo: LX.Music.MusicInfoOnline) => {
     t.status !== 'failed' && t.status !== 'cancelled')
 }
 
+/** 读取文件头判断真实音频格式（源可能返回错误页或与扩展名不符的内容） */
+const sniffAudioExt = async(path: string): Promise<string | null> => {
+  const head = await RNFS.read(path, 12, 0, 'base64').catch(() => '')
+  if (!head) return null
+  let b: Buffer
+  try {
+    b = Buffer.from(head, 'base64')
+  } catch {
+    return null
+  }
+  if (b.length < 8) return null
+  const ascii = (start: number, count: number) => b.subarray(start, start + count).toString('ascii')
+  if (ascii(0, 4) == 'fLaC') return 'flac'
+  if (ascii(0, 3) == 'ID3') return 'mp3'
+  if (ascii(0, 4) == 'RIFF' && ascii(8, 4) == 'WAVE') return 'wav'
+  if (ascii(0, 4) == 'OggS') return 'ogg'
+  if (ascii(4, 4) == 'ftyp') return 'm4a'
+  if (ascii(0, 4) == 'FORM' && ['AIFF', 'AIFC'].includes(ascii(8, 4))) return 'aiff'
+  if (ascii(0, 4) == 'MAC ') return 'ape'
+  if (b[0] == 0xff && (b[1] & 0xf6) == 0xf0) return 'aac'
+  if (b[0] == 0xff && (b[1] & 0xe0) == 0xe0) return 'mp3'
+  return null
+}
+
 class InvalidUrlError extends Error {}
 
 /** 复刻播放器取链逻辑，取下载直链（带单次 429 退避与一次普通重试） */
@@ -353,7 +378,21 @@ const startDownload = async(task: DownloadTask) => {
       throw new Error(`下载失败，状态码: ${statusCode || '未知'}`)
     }
 
-    const basePath = localPath.replace(/\.[^.]+$/, '')
+    // 校验真实音频格式：源可能返回 HTML/JSON 错误页（扩展名对但内容不对 → 播放永久缓冲）
+    const realExt = await sniffAudioExt(localPath)
+    if (!realExt || realExt === 'ape') {
+      await RNFS.unlink(localPath).catch(() => {})
+      throw new Error(realExt === 'ape'
+        ? 'APE 格式无法在 iOS 播放，请换其它音质下载'
+        : '下载内容不是有效音频（可能被防盗链拦截），已删除，请重试或换音质')
+    }
+    let finalPath = localPath
+    if (realExt !== ext) {
+      // 内容与扩展名不一致时以真实格式为准重命名，避免播放器按错误容器解析
+      finalPath = `${DOWNLOAD_DIR}/${buildFilename(task.musicInfo, realExt)}`
+      await RNFS.moveFile(localPath, finalPath).catch(() => { finalPath = localPath })
+    }
+    const basePath = finalPath.replace(/\.[^.]+$/, '')
 
     // 歌词/封面：带超时，失败不影响下载结果
     const lyric = await withTimeout(
@@ -380,12 +419,12 @@ const startDownload = async(task: DownloadTask) => {
       await withTimeout(picJob.promise, PIC_TIMEOUT, null)
     }
 
-    registerLocalDownload(task.musicInfo, localPath, quality)
+    registerLocalDownload(task.musicInfo, finalPath, quality)
 
     updateTask(task.id, {
       status: 'completed',
       progress: 1,
-      localPath,
+      localPath: finalPath,
       completedAt: Date.now(),
       speed: 0,
       errorMessage: undefined,
